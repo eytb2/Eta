@@ -12,7 +12,7 @@ internal object AgentVirtualDisplayToolCatalog {
     val names: Set<String> = setOf(
         "virtual_display_create", "virtual_display_start_app", "virtual_display_screenshot",
         "virtual_display_tap", "virtual_display_swipe", "virtual_display_key",
-        "virtual_display_release", "virtual_display_status",
+        "virtual_display_release", "virtual_display_status", "virtual_display_takeover",
     )
 
     fun appendTo(tools: JSONArray) {
@@ -80,6 +80,13 @@ internal object AgentVirtualDisplayToolCatalog {
                     JSONObject().put("button", text("按钮名，如 back、home、enter")),
                     required = arrayOf("button"),
                 ),
+            ),
+        )
+        tools.put(
+            AgentToolSchema.function(
+                name = "virtual_display_takeover",
+                description = "在真屏上以 MIUI 原生小窗打开虚拟屏接管窗：实时镜像虚拟屏画面，用户可在小窗内直接触摸操作虚拟屏；关闭小窗后 Agent 截图自动恢复。需要 Root。",
+                parameters = parameters(JSONObject()),
             ),
         )
         tools.put(

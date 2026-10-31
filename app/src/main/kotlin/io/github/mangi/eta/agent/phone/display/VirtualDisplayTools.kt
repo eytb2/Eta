@@ -19,7 +19,7 @@ internal class VirtualDisplayTools(
     val names = setOf(
         "virtual_display_create", "virtual_display_start_app", "virtual_display_screenshot",
         "virtual_display_tap", "virtual_display_swipe", "virtual_display_key",
-        "virtual_display_release", "virtual_display_status",
+        "virtual_display_release", "virtual_display_status", "virtual_display_takeover",
     )
 
     fun execute(name: String, arguments: JSONObject): JSONObject {
@@ -33,6 +33,7 @@ internal class VirtualDisplayTools(
                 "virtual_display_swipe" -> swipe(arguments)
                 "virtual_display_key" -> key(arguments)
                 "virtual_display_release" -> release()
+                "virtual_display_takeover" -> takeover()
                 else -> status()
             }
         } catch (t: Throwable) {
@@ -101,6 +102,15 @@ internal class VirtualDisplayTools(
         val keyCode = KEY_BUTTONS[button.lowercase()]
             ?: return error("INVALID_ARGUMENT", "不支持按键 $button；可用：${KEY_BUTTONS.keys.joinToString()} ")
         return injectResult(controller.injectKey(keyCode), "key $button")
+    }
+
+    private fun takeover(): JSONObject {
+        val err = controller.openTakeoverWindow()
+        return if (err == null) {
+            JSONObject().put("ok", true).put("message", "接管小窗已打开（MIUI 原生小窗）")
+        } else {
+            error("TAKEOVER_FAILED", err)
+        }
     }
 
     private fun release(): JSONObject {

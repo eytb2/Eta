@@ -107,6 +107,13 @@ internal class VirtualDisplayController(
         )
     }
 
+    /** 以 MIUI 原生小窗打开真屏侧接管窗（镜像虚拟屏 + 触摸透传）。 */
+    fun openTakeoverWindow(): String? {
+        val intent = android.content.Intent(context, VirtualDisplayActivity::class.java)
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+        return MiuiSmallWindow.start(context, intent, context.packageName)
+    }
+
     fun release() {
         synchronized(lock) {
             _display.value?.let { runCatching { it.release() } }
