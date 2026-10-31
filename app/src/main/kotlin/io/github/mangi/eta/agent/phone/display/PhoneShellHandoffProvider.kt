@@ -104,9 +104,9 @@ internal object PhoneShellHub {
         shellRef?.let { return it }
         val apk = context.applicationInfo.sourceDir
         val command =
-            "CLASSPATH='$apk' app_process /system/bin " +
+            "setsid sh -c \"CLASSPATH='$apk' app_process /system/bin " +
                 "io.github.mangi.eta.agent.phone.display.PhoneShellHelperMain " +
-                "${android.os.Process.myUid()} '$apk' '$PROCESS_NAME' >/dev/null 2>&1 &"
+                "${android.os.Process.myUid()} '$apk' '$PROCESS_NAME'\" >/dev/null 2>&1 &"
         if (!launch(command)) return null
         val deadline = SystemClock.elapsedRealtime() + HANDOFF_TIMEOUT_MS
         while (SystemClock.elapsedRealtime() < deadline) {
