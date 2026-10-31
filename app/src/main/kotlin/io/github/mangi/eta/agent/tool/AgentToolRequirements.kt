@@ -60,6 +60,9 @@ internal object AgentToolRequirements {
             "search_downloads", "search_notes", "search_coloros_recordings",
             "search_recording_summaries", "search_system_memories", "search_saved_places",
             "search_qq_chat_images", "search_wechat_chat_images",
+            "virtual_display_create", "virtual_display_start_app", "virtual_display_screenshot",
+            "virtual_display_tap", "virtual_display_swipe", "virtual_display_key",
+            "virtual_display_release", "virtual_display_status",
         )
         PersonalSearchTools.names.forEach { put(it, LocalToolRequirement(RootRequirement.REQUIRED, colorOs = true)) }
         AgentPhoneToolCatalog.entries.forEach { entry ->

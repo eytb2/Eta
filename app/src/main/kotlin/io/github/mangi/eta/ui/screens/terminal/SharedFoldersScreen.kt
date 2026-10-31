@@ -23,12 +23,16 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,9 +46,12 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
+import io.github.mangi.eta.agent.device.RootAccess
 import io.github.mangi.eta.agent.terminal.AlpineEnvironmentPaths
 import io.github.mangi.eta.agent.terminal.LinuxDistribution
 import io.github.mangi.eta.agent.terminal.LinuxEnvironmentPaths
+import io.github.mangi.eta.agent.terminal.RootBindMounts
+import io.github.mangi.eta.agent.terminal.SharedFolderKind
 import io.github.mangi.eta.agent.terminal.SharedFolderMount
 import io.github.mangi.eta.agent.terminal.SharedFolderMounts
 import io.github.mangi.eta.agent.terminal.ShellProcessSupervisor
@@ -100,9 +107,13 @@ internal fun SharedFoldersScreen(
 
     var mounts by remember { mutableStateOf(SharedFolderMounts.current()) }
     var sourceExists by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var mountStatus by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var rootBusy by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
     var removeTarget by remember { mutableStateOf<SharedFolderMount?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
+    val rootState by RootAccess.state.collectAsState()
+    val rootGranted = rootState.isGranted
     val publicAccessLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         if (Environment.isExternalStorageManager()) showPicker = true
         else notice = context.getString(R.string.capability_workspace_public_denied)
@@ -118,7 +129,38 @@ internal fun SharedFoldersScreen(
         }
     }
 
+    fun refreshMountStatus(list: List<SharedFolderMount>) {
+        if (!rootGranted || list.none { it.kind == SharedFolderKind.ROOT_BIND }) {
+            mountStatus = emptyMap()
+            return
+        }
+        coroutineScope.launch {
+            mountStatus = withContext(Dispatchers.IO) { RootBindMounts.probe(shellSupervisor, list) }
+        }
+    }
+
     LaunchedEffect(Unit) { refreshSources(mounts) }
+    LaunchedEffect(rootGranted, mounts) { refreshMountStatus(mounts) }
+
+    fun toggleRootMount(mount: SharedFolderMount) {
+        if (rootBusy || !rootGranted) return
+        val mounted = mountStatus[mount.name] == true
+        rootBusy = true
+        coroutineScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (mounted) RootBindMounts.umount(shellSupervisor, mount)
+                else RootBindMounts.mount(shellSupervisor, mount)
+            }
+            rootBusy = false
+            if (!result.ok) {
+                notice = context.getString(
+                    if (mounted) R.string.shared_folders_error_unmount else R.string.shared_folders_error_mount,
+                    result.message,
+                )
+            }
+            refreshMountStatus(mounts)
+        }
+    }
 
     MiuixScaffoldPage(
         title = stringResource(R.string.shared_folders_title),
@@ -134,6 +176,8 @@ internal fun SharedFoldersScreen(
                 }
                 mounts.forEachIndexed { index, mount ->
                     val missing = sourceExists[mount.sourcePath] == false
+                    val rootBind = mount.kind == SharedFolderKind.ROOT_BIND
+                    val mounted = mountStatus[mount.name]
                     if (index > 0) EtaPreferenceDivider(hasLeading = false)
                     EtaPreference(
                         title = mount.name,
@@ -144,17 +188,42 @@ internal fun SharedFoldersScreen(
                                 context.getString(
                                     R.string.shared_folders_mount_point,
                                     "${SharedFolderMounts.LINUX_MOUNTS_ROOT}/${mount.name}",
+                                ) + " · " + context.getString(
+                                    if (rootBind) R.string.shared_folders_kind_root else R.string.shared_folders_kind_proot,
                                 )
                             )
                             if (missing) {
                                 append(" · ")
                                 append(context.getString(R.string.shared_folders_source_missing))
                             }
+                            if (rootBind) {
+                                append("\n")
+                                append(
+                                    when {
+                                        !rootGranted -> context.getString(R.string.shared_folders_root_required)
+                                        mounted == true -> context.getString(R.string.shared_folders_status_mounted)
+                                        else -> context.getString(R.string.shared_folders_status_not_mounted)
+                                    }
+                                )
+                            }
                         },
                         summaryColor = BasicComponentDefaults.summaryColor(
                             color = if (missing) MiuixTheme.colorScheme.error else MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         ),
                         endActions = {
+                            if (rootBind && rootGranted) {
+                                IconButton(onClick = { toggleRootMount(mount) }) {
+                                    Icon(
+                                        imageVector = if (mounted == true) Icons.Rounded.LinkOff else Icons.Rounded.Link,
+                                        contentDescription = stringResource(
+                                            if (mounted == true) R.string.shared_folders_action_unmount
+                                            else R.string.shared_folders_action_mount,
+                                        ),
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                                    )
+                                }
+                            }
                             IconButton(onClick = { removeTarget = mount }) {
                                 Icon(
                                     imageVector = Icons.Rounded.DeleteOutline,
@@ -162,6 +231,33 @@ internal fun SharedFoldersScreen(
                                     modifier = Modifier.size(20.dp),
                                     tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
                                 )
+                            }
+                        },
+                    )
+                }
+                if (rootGranted && mounts.any { it.kind == SharedFolderKind.ROOT_BIND && mountStatus[it.name] == true }) {
+                    EtaPreferenceDivider(hasLeading = false)
+                    EtaPreference(
+                        title = stringResource(R.string.shared_folders_unmount_all),
+                        titleColor = BasicComponentDefaults.titleColor(color = MiuixTheme.colorScheme.error),
+                        startAction = {
+                            EtaPreferenceIcon(Icons.Rounded.LinkOff, tint = MiuixTheme.colorScheme.error)
+                        },
+                        onClick = {
+                            if (rootBusy) return@EtaPreference
+                            rootBusy = true
+                            coroutineScope.launch {
+                                val result = withContext(Dispatchers.IO) {
+                                    RootBindMounts.unmountAll(shellSupervisor, mounts)
+                                }
+                                rootBusy = false
+                                if (!result.ok) {
+                                    notice = context.getString(
+                                        R.string.shared_folders_error_unmount,
+                                        result.message,
+                                    )
+                                }
+                                refreshMountStatus(mounts)
                             }
                         },
                     )
@@ -228,12 +324,17 @@ internal fun SharedFoldersScreen(
             existing = mounts,
             extraForbiddenRoots = rootfsPaths,
             onDismiss = { showPicker = false },
-            onConfirm = { source, name ->
-                val updated = mounts + SharedFolderMount(name = name, sourcePath = source)
+            rootGranted = rootGranted,
+            onConfirm = { source, name, kind ->
+                val updated = mounts + SharedFolderMount(name = name, sourcePath = source, kind = kind)
                 if (SharedFolderMounts.save(updated)) {
                     mounts = updated
                     refreshSources(updated)
+                    refreshMountStatus(updated)
                     showPicker = false
+                    if (kind == SharedFolderKind.ROOT_BIND && !rootGranted) {
+                        notice = context.getString(R.string.shared_folders_root_required)
+                    }
                 } else {
                     notice = context.getString(R.string.shared_folders_error_save)
                 }
@@ -259,14 +360,20 @@ internal fun SharedFoldersScreen(
                         removeTarget = null
                         refreshSources(updated)
                         coroutineScope.launch(Dispatchers.IO) {
+                            val targetArg = shellQuote("${SharedFolderMounts.ANDROID_MOUNTS_ROOT}/${target.name}")
                             // 清理空的挂载点目录；仍有会话占用时 rmdir 失败，无副作用。
+                            // Root 真挂载条目先尝试卸载全局 bind mount，未挂载时跳过。
+                            val cleanup = if (target.kind == SharedFolderKind.ROOT_BIND && TerminalRuntime.rootAvailable) {
+                                "umount $targetArg 2>/dev/null; umount -l $targetArg 2>/dev/null; rmdir $targetArg 2>/dev/null"
+                            } else {
+                                "rmdir $targetArg 2>/dev/null"
+                            }
                             runOneShotShell(
                                 processSupervisor = shellSupervisor,
-                                identity = TerminalRuntime.defaultIdentity(TerminalEnvironment.ANDROID),
-                                command = "rmdir " +
-                                    shellQuote("${SharedFolderMounts.ANDROID_MOUNTS_ROOT}/${target.name}") +
-                                    " 2>/dev/null",
-                                timeoutSeconds = 10,
+                                identity = if (target.kind == SharedFolderKind.ROOT_BIND && TerminalRuntime.rootAvailable) "root"
+                                else TerminalRuntime.defaultIdentity(TerminalEnvironment.ANDROID),
+                                command = cleanup,
+                                timeoutSeconds = 15,
                             )
                         }
                     } else {
@@ -311,8 +418,9 @@ private fun SharedFolderPickerDialog(
     supervisor: ShellProcessSupervisor,
     existing: List<SharedFolderMount>,
     extraForbiddenRoots: List<String>,
+    rootGranted: Boolean,
     onDismiss: () -> Unit,
-    onConfirm: (sourcePath: String, name: String) -> Unit,
+    onConfirm: (sourcePath: String, name: String, kind: SharedFolderKind) -> Unit,
 ) {
     var path by remember { mutableStateOf("/sdcard") }
     var pathInput by remember { mutableStateOf("/sdcard") }
@@ -320,6 +428,7 @@ private fun SharedFolderPickerDialog(
     var browseError by remember { mutableStateOf<String?>(null) }
     var nameInput by remember { mutableStateOf("sdcard") }
     var nameTouched by remember { mutableStateOf(false) }
+    var kind by remember { mutableStateOf(SharedFolderKind.PROOT_BIND) }
     var formError by remember { mutableStateOf<String?>(null) }
 
     fun navigateTo(target: String) {
@@ -424,6 +533,30 @@ private fun SharedFolderPickerDialog(
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 modifier = Modifier.padding(top = 8.dp),
             )
+            Text(
+                text = stringResource(R.string.shared_folders_kind_label),
+                style = MiuixTheme.textStyles.footnote1,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(top = 12.dp),
+            )
+            KindOptionRow(
+                label = stringResource(R.string.shared_folders_kind_proot),
+                selected = kind == SharedFolderKind.PROOT_BIND,
+                onClick = { kind = SharedFolderKind.PROOT_BIND },
+            )
+            KindOptionRow(
+                label = stringResource(R.string.shared_folders_kind_root),
+                selected = kind == SharedFolderKind.ROOT_BIND,
+                onClick = { kind = SharedFolderKind.ROOT_BIND },
+            )
+            if (kind == SharedFolderKind.ROOT_BIND && !rootGranted) {
+                Text(
+                    text = stringResource(R.string.shared_folders_root_required),
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = MiuixTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 4.dp),
+                )
+            }
             TextField(
                 value = nameInput,
                 onValueChange = {
@@ -475,12 +608,38 @@ private fun SharedFolderPickerDialog(
                     if (errorText != null) {
                         formError = errorText
                     } else {
-                        onConfirm(path, nameInput.trim())
+                        onConfirm(path, nameInput.trim(), kind)
                     }
                 },
                 modifier = Modifier.padding(top = 12.dp),
             )
         }
+    }
+}
+
+@Composable
+private fun KindOptionRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 6.dp),
+    ) {
+        Icon(
+            imageVector = if (selected) Icons.Rounded.Check else Icons.Rounded.Folder,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp),
+            tint = if (selected) MiuixTheme.colorScheme.primary else EtaPreferenceColors.Orange,
+        )
+        Text(
+            text = label,
+            style = MiuixTheme.textStyles.body2,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

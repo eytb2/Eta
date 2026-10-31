@@ -120,6 +120,17 @@
   <string name="shared_folders_error_name_duplicate">Name already in use</string>
   <string name="shared_folders_error_limit">Up to %1$d shared folders</string>
   <string name="shared_folders_error_save">Failed to save. Please try again</string>
+  <string name="shared_folders_kind_label">Mount mode</string>
+  <string name="shared_folders_kind_proot">PRoot bind (no root)</string>
+  <string name="shared_folders_kind_root">Root bind (chroot)</string>
+  <string name="shared_folders_root_required">Root bind mounts require root access</string>
+  <string name="shared_folders_status_mounted">Mounted (root)</string>
+  <string name="shared_folders_status_not_mounted">Not mounted manually</string>
+  <string name="shared_folders_action_mount">Mount</string>
+  <string name="shared_folders_action_unmount">Unmount</string>
+  <string name="shared_folders_unmount_all">Unmount all root mounts</string>
+  <string name="shared_folders_error_mount">Mount failed: %1$s</string>
+  <string name="shared_folders_error_unmount">Unmount failed: %1$s</string>
   <string name="shared_folders_footer">Shared folders are mounted when a new Linux terminal session starts; changes apply to the next command or session. Emulated storage such as /sdcard does not support permission changes inside Linux.</string>
   <string name="route_linux_files">Linux files</string>
   <string name="linux_files_title">Linux files</string>
@@ -1461,4 +1472,8 @@
   <string name="chat_queue_remove">移除排队消息</string>
   <string name="chat_queue_images_only">[%1$d 张图片]</string>
   <string name="chat_queue_files_only">[%1$d 个文件]</string>
+  <string name="ui_enable_virtual_display_tools_51a6f0">%s</string>
+  <string name="virtual_display_takeover_title">%s</string>
+  <string name="virtual_display_takeover_close">Close</string>
+  <string name="virtual_display_takeover_none">not created</string>
 </resources>

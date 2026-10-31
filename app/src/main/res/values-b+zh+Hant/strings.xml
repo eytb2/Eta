@@ -120,6 +120,17 @@
   <string name="shared_folders_error_name_duplicate">掛載名稱已被使用</string>
   <string name="shared_folders_error_limit">最多設定 %1$d 個共享資料夾</string>
   <string name="shared_folders_error_save">儲存失敗，請重試</string>
+  <string name="shared_folders_kind_label">掛載方式</string>
+  <string name="shared_folders_kind_proot">PRoot 綁定（免 Root）</string>
+  <string name="shared_folders_kind_root">Root 真掛載（chroot）</string>
+  <string name="shared_folders_root_required">Root 真掛載需要 Root 授權</string>
+  <string name="shared_folders_status_mounted">已掛載（root）</string>
+  <string name="shared_folders_status_not_mounted">未手動掛載</string>
+  <string name="shared_folders_action_mount">掛載</string>
+  <string name="shared_folders_action_unmount">卸載</string>
+  <string name="shared_folders_unmount_all">全部卸載 Root 掛載</string>
+  <string name="shared_folders_error_mount">掛載失敗：%1$s</string>
+  <string name="shared_folders_error_unmount">卸載失敗：%1$s</string>
   <string name="shared_folders_footer">共享資料夾在新的 Linux 終端工作階段建立時掛載到 /workspace/mounts/ 下，設定變更對下一條指令或新工作階段生效；/sdcard 等模擬儲存在 Linux 中不支援修改權限位元。</string>
   <string name="route_linux_files">Linux 檔案</string>
   <string name="linux_files_title">Linux 檔案</string>
@@ -1372,4 +1383,8 @@
   <string name="chat_queue_remove">移除排隊訊息</string>
   <string name="chat_queue_images_only">[%1$d 張圖片]</string>
   <string name="chat_queue_files_only">[%1$d 個檔案]</string>
+  <string name="ui_enable_virtual_display_tools_51a6f0">啟用虛擬螢幕工具</string>
+  <string name="virtual_display_takeover_title">虛擬螢幕接管</string>
+  <string name="virtual_display_takeover_close">關閉</string>
+  <string name="virtual_display_takeover_none">未建立</string>
 </resources>

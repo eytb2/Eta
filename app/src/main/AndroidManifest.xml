@@ -96,6 +96,13 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".agent.phone.display.VirtualDisplayActivity"
+            android:excludeFromRecents="false"
+            android:exported="false"
+            android:resizeableActivity="true"
+            android:theme="@style/Theme.Eta" />
+
         <service
             android:name=".agent.voice.EtaVoiceInteractionService"
             android:exported="true"
@@ -175,6 +182,12 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <provider
+            android:name=".agent.phone.display.PhoneShellHandoffProvider"
+            android:authorities="io.github.mangi.eta.phone.handoff"
+            android:exported="true"
+            android:grantUriPermissions="false" />
 
         <provider
             android:name=".agent.accessibility.AgentAccessibilityHealthProvider"

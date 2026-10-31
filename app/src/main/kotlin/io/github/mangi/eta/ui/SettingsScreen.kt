@@ -29,6 +29,7 @@ import androidx.compose.material.icons.rounded.Layers
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.PictureInPicture
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.Psychology
 import androidx.compose.material.icons.rounded.Security
@@ -426,6 +427,16 @@ private fun SettingsPageContent(
                         key = Prefs.Keys.AGENT_TERMINAL_TOOLS,
                         icon = Icons.Rounded.Terminal,
                         iconTint = EtaPreferenceColors.Green,
+                    )
+
+                    EtaPreferenceDivider()
+                    SwitchPref(
+                        context = context,
+                        prefs = agentPrefs,
+                        title = stringResource(R.string.ui_enable_virtual_display_tools_51a6f0),
+                        key = Prefs.Keys.AGENT_VIRTUAL_DISPLAY_TOOLS,
+                        icon = Icons.Rounded.PictureInPicture,
+                        iconTint = EtaPreferenceColors.Yellow,
                     )
 
                     EtaPreferenceDivider()

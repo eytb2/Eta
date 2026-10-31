@@ -38,6 +38,7 @@ internal object Prefs {
         const val AGENT_CUSTOM_MODEL = "agent_custom_model"
         const val AGENT_REQUIRE_PREFIX = "agent_require_prefix"
         const val AGENT_TERMINAL_TOOLS = "agent_terminal_tools"
+        const val AGENT_VIRTUAL_DISPLAY_TOOLS = "agent_virtual_display_tools"
         const val AGENT_BROWSER_TOOLS = "agent_browser_tools"
         const val AGENT_DEVICE_DIRECT_TOOLS = "agent_device_direct_tools"
         const val AGENT_DEVICE_SENSITIVE_READ_TOOLS = "agent_device_sensitive_read_tools"
@@ -59,6 +60,7 @@ internal object Prefs {
             AGENT_CUSTOM_MODEL to true,
             AGENT_REQUIRE_PREFIX to false,
             AGENT_TERMINAL_TOOLS to true,
+            AGENT_VIRTUAL_DISPLAY_TOOLS to false,
             AGENT_BROWSER_TOOLS to true,
             AGENT_DEVICE_DIRECT_TOOLS to true,
             AGENT_DEVICE_SENSITIVE_READ_TOOLS to true,
@@ -71,6 +73,7 @@ internal object Prefs {
         /** 由 Eta Runtime 最终裁决、不要求 Xposed 框架在线的开关。 */
         val LOCAL_AGENT_KEYS: Set<String> = setOf(
             AGENT_TERMINAL_TOOLS,
+            AGENT_VIRTUAL_DISPLAY_TOOLS,
             AGENT_BROWSER_TOOLS,
             AGENT_DEVICE_DIRECT_TOOLS,
             AGENT_DEVICE_SENSITIVE_READ_TOOLS,

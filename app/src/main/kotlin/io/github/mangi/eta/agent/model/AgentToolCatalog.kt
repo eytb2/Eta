@@ -15,6 +15,7 @@ internal object AgentToolCatalog {
         skillGitHubInstall: Boolean = false,
         memoryTools: Boolean = false,
         memoryWritable: Boolean = true,
+        virtualDisplayTools: Boolean = false,
         capabilities: AgentToolCapabilities = AgentToolCapabilities(rootAvailable = true),
         localWebSearch: Boolean = true,
     ): JSONArray =
@@ -38,6 +39,7 @@ internal object AgentToolCatalog {
                 githubInstall = skillGitHubInstall,
             )
             if (memoryTools) AgentMemoryToolCatalog.appendTo(tools, writable = memoryWritable)
+            if (virtualDisplayTools) AgentVirtualDisplayToolCatalog.appendTo(tools)
             if (terminalTools) {
                 AgentFileVisionToolCatalog.appendTo(tools)
                 AgentTerminalToolCatalog.appendTo(tools)

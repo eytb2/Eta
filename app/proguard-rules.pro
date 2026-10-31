@@ -67,3 +67,10 @@
 -keep class io.github.mangi.eta.agent.phone.PhoneCommandMain {
     public static void main(java.lang.String[]);
 }
+
+# app_process 以固定类名拉起虚拟屏 Root 助手；AIDL Stub 依赖 Binder 反射分发。
+-keep class io.github.mangi.eta.agent.phone.display.PhoneShellHelperMain {
+    public static void main(java.lang.String[]);
+}
+-keep class io.github.mangi.eta.agent.phone.display.IPhoneShell { *; }
+-keep class io.github.mangi.eta.agent.phone.display.IPhoneShell$* { *; }

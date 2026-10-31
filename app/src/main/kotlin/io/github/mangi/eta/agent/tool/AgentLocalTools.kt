@@ -18,6 +18,7 @@ import io.github.mangi.eta.agent.device.LocalNetworkPermission
 import io.github.mangi.eta.agent.web.AgentWebTools
 import io.github.mangi.eta.agent.web.WebHttpTransport
 import io.github.mangi.eta.agent.model.AgentScreenObservationContract
+import io.github.mangi.eta.agent.model.AgentVirtualDisplayToolCatalog
 import io.github.mangi.eta.agent.model.AgentSensitiveToolPolicy
 import io.github.mangi.eta.agent.model.AgentTerminalToolCatalog
 import io.github.mangi.eta.agent.model.AgentFileToolCatalog
@@ -74,6 +75,9 @@ internal class AgentLocalTools(
     private val terminalToolsEnabled: () -> Boolean = {
         Prefs.isEnabled(Prefs.Keys.AGENT_TERMINAL_TOOLS)
     },
+    private val virtualDisplayToolsEnabled: () -> Boolean = {
+        Prefs.isEnabled(Prefs.Keys.AGENT_VIRTUAL_DISPLAY_TOOLS)
+    },
     private val deviceDirectToolsEnabled: () -> Boolean = {
         Prefs.isEnabled(Prefs.Keys.AGENT_DEVICE_DIRECT_TOOLS)
     },
@@ -118,6 +122,11 @@ internal class AgentLocalTools(
         foregroundAction = ::executeForegroundIntent,
     )
     private val imageTools = AgentImageTools(context, rootCommandExecutor, rootAvailable)
+    private val virtualDisplayTools = io.github.mangi.eta.agent.phone.display.VirtualDisplayTools(
+        context = context,
+        logger = logger,
+        rootExecutor = rootCommandExecutor,
+    )
     private val webTools = AgentWebTools(
         transport = WebHttpTransport(AgentHttpClient.client),
         localNetworkAccess = { LocalNetworkPermission.accessState(context).name.lowercase(Locale.ROOT) },
@@ -160,6 +169,7 @@ internal class AgentLocalTools(
         webTools.close()
         terminalController.interruptAll()
         deviceController.close()
+        virtualDisplayTools.close()
         rootCommandExecutor.close()
         githubSkillSource?.close()
         inspectedGitHubSnapshots.clear()
@@ -265,6 +275,7 @@ internal class AgentLocalTools(
                     structuredDeviceTools.execute(toolCall.name, args)
                         ?: textResult(errorResult("UNKNOWN_TOOL", "未知设备工具"))
                 "read_image" -> fileVisionTool { imageTools.readImage(args) }
+                in AgentVirtualDisplayToolCatalog.names -> textResult(virtualDisplayTool(toolCall.name, args))
                 in AgentTerminalToolCatalog.names -> textResult(terminalTool {
                     if (toolCall.name == "terminal" && args.optString("action").equals("check_root", ignoreCase = true)) checkRoot()
                     else terminalController.executeTool(toolCall.name, args)
@@ -304,6 +315,16 @@ internal class AgentLocalTools(
                 result.copy(sensitive = true)
             }
         }
+
+    private fun virtualDisplayTool(name: String, args: JSONObject): String {
+        if (!virtualDisplayToolsEnabled()) {
+            return errorResult("VIRTUAL_DISPLAY_TOOLS_DISABLED", "请先在设置中启用虚拟屏工具")
+        }
+        if (!rootAvailable()) {
+            return errorResult("ROOT_REQUIRED", "此操作需要 Root 授权，本次未执行")
+        }
+        return virtualDisplayTools.execute(name, args).toString()
+    }
 
     private fun executeForegroundIntent(toolName: String, action: () -> JSONObject): JSONObject {
         fun execute(): JSONObject {

@@ -5,10 +5,14 @@ import io.github.mangi.eta.config.Prefs
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** 共享方式：PRoot 用 -b 用户态绑定；ROOT_BIND 由 chroot 后端以 root bind mount 挂载。 */
+internal enum class SharedFolderKind { PROOT_BIND, ROOT_BIND }
+
 /** 一条共享文件夹配置：Android 侧目录 [sourcePath] 在 Linux 环境中出现在 /workspace/mounts/[name]。 */
 internal data class SharedFolderMount(
     val name: String,
     val sourcePath: String,
+    val kind: SharedFolderKind = SharedFolderKind.PROOT_BIND,
 )
 
 /**
@@ -23,6 +27,8 @@ internal object SharedFolderMounts {
     const val MAX_MOUNTS = 16
     const val LINUX_MOUNTS_ROOT = "/workspace/mounts"
     const val ANDROID_MOUNTS_ROOT = "/data/local/tmp/eta/mounts"
+    const val KIND_PROOT = "proot"
+    const val KIND_ROOT = "root"
 
     private val NAME_PATTERN = Regex("[A-Za-z0-9._-]{1,48}")
 
@@ -117,6 +123,7 @@ internal object SharedFolderMounts {
                 JSONObject()
                     .put("name", mount.name)
                     .put("source", mount.sourcePath)
+                    .put("kind", if (mount.kind == SharedFolderKind.ROOT_BIND) KIND_ROOT else KIND_PROOT)
             )
         }
         return array.toString()
@@ -131,9 +138,13 @@ internal object SharedFolderMounts {
             val item = runCatching { array.getJSONObject(index) }.getOrNull() ?: continue
             val name = item.optString("name").trim()
             val source = normalizeSourcePath(item.optString("source")) ?: continue
+            val kind = when (item.optString("kind", KIND_PROOT)) {
+                KIND_ROOT -> SharedFolderKind.ROOT_BIND
+                else -> SharedFolderKind.PROOT_BIND
+            }
             if (!NAME_PATTERN.matches(name) || name == "." || name == "..") continue
             if (mounts.any { it.name == name || it.sourcePath == source }) continue
-            mounts += SharedFolderMount(name = name, sourcePath = source)
+            mounts += SharedFolderMount(name = name, sourcePath = source, kind = kind)
         }
         return mounts.take(MAX_MOUNTS)
     }
