@@ -3,6 +3,7 @@ import kotlin.system.exitProcess
 
 import android.annotation.SuppressLint
 import android.app.ActivityOptions
+import android.content.ComponentName
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.Intent
@@ -15,6 +16,7 @@ import android.os.Parcel
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import android.view.Display
 import android.view.InputDevice
 import android.view.InputEvent
 import android.view.KeyEvent
@@ -25,7 +27,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Root 助手进程里的虚拟屏服务，自 mika 的 ShellService 移植并按 Root 简化：
- * 不做主屏占用检查、剪贴板、静音等能力，只保留建屏 / 输入注入 / 定屏启动。
+ * 只保留主屏占用检查、建屏 / 输入注入 / 定屏启动（不做剪贴板、静音等能力）。
  * 隐藏接口一律反射调用，失败退回等效命令（am start --display / input -d）。
  *
  * @param allowedUid 只接受这个 uid（Eta App）的调用；Root 助手本身 uid 为 0。
@@ -78,6 +80,14 @@ internal class PhoneShellService(
 
     override fun startApp(displayId: Int, packageName: String?, activity: String?): Int {
         if (!ownDisplay(displayId) || packageName.isNullOrBlank()) return START_ERROR
+        // 主屏占用保护：目标 App 正被用户在主屏看着时不启动，免得把用户的界面挪走或打断；
+        // 看不清主屏状态时宁可不启动，也不冒险打扰用户（自 mika 的 inUseOnMainScreen 移植）
+        try {
+            if (inUseOnMainScreen(packageName)) return START_IN_USE_ON_MAIN
+        } catch (t: Throwable) {
+            Log.e(TAG, "cannot inspect main-screen tasks", t)
+            return START_ERROR
+        }
         return try {
             val intent = if (activity.isNullOrBlank()) {
                 context.packageManager.getLaunchIntentForPackage(packageName) ?: return START_NOT_FOUND
@@ -181,6 +191,35 @@ internal class PhoneShellService(
         }
     }
 
+    /**
+     * 一根手指的一笔：按下、按 [times] 逐点移动、在最后一点抬起；每个事件到了它的时刻
+     * 才注入（事件时间就是那一刻），App 看到的速度就是调用方排好的快慢。只发到本服务
+     * 自己建的屏。按下没注入成功返回 false（调用方改走别的路）；按下之后中途哪个点没
+     * 注入成功也照样往下走，最后一定补发抬起，不让手指一直按着。
+     */
+    override fun injectStroke(displayId: Int, xs: IntArray, ys: IntArray, times: LongArray): Boolean {
+        if (!ownDisplay(displayId)) return false
+        val n = times.size
+        if (n < 2 || n > STROKE_MAX_POINTS || xs.size != n || ys.size != n || times[0] != 0L ||
+            times.last() > STROKE_MAX_MS || (1 until n).any { times[it] < times[it - 1] }
+        ) return false
+        val down = SystemClock.uptimeMillis()
+        fun event(i: Int, action: Int): MotionEvent {
+            val props = MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_FINGER }
+            val coords = MotionEvent.PointerCoords().apply { x = xs[i].toFloat(); y = ys[i].toFloat(); pressure = 1f; size = 1f }
+            return MotionEvent.obtain(down, down + times[i], action, 1, arrayOf(props), arrayOf(coords), 0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0)
+        }
+        fun send(i: Int, action: Int): Boolean {
+            val wait = down + times[i] - SystemClock.uptimeMillis()
+            if (wait > 0) SystemClock.sleep(wait)
+            val e = event(i, action)
+            return try { inject(e, displayId) } finally { e.recycle() }
+        }
+        if (!send(0, MotionEvent.ACTION_DOWN)) return false
+        for (i in 1 until n) send(i, MotionEvent.ACTION_MOVE)
+        return send(n - 1, MotionEvent.ACTION_UP) || send(n - 1, MotionEvent.ACTION_UP)
+    }
+
     override fun identity(): IntArray = intArrayOf(Process.myUid(), Process.myPid())
 
     /**
@@ -253,6 +292,35 @@ internal class PhoneShellService(
         return super.onTransact(code, data, reply, flags)
     }
 
+    /** 任务 [task] 的 baseActivity / topActivity 所属包名 */
+    private fun packagesOf(task: Any): List<String> = listOf("baseActivity", "topActivity").mapNotNull {
+        (TASK_INFO.getField(it).get(task) as? ComponentName)?.packageName
+    }
+
+    /** 该包在主屏有可见任务，或者就是主屏最上面的任务 */
+    private fun inUseOnMainScreen(packageName: String): Boolean {
+        val visibleField = runCatching { TASK_INFO.getField("isVisible") }.getOrNull()
+        return tasksOn(Display.DEFAULT_DISPLAY).withIndex().any { (index, task) ->
+            packageName in packagesOf(task) && (visibleField?.getBoolean(task) ?: (index == 0))
+        }
+    }
+
+    /**
+     * IActivityTaskManager.getTasks：按最近使用排序，Root 助手能拿到全部任务。
+     * API 33+ 有带 displayId 的重载，优先用它；更早的版本取全部再按 TaskInfo.displayId 过滤。
+     */
+    private fun tasksOn(displayId: Int): List<Any> {
+        val methods = taskManager.javaClass.methods.filter { it.name == "getTasks" }
+        val withDisplay = methods.firstOrNull { it.parameterTypes.size == 4 }
+        val tasks = if (withDisplay != null) {
+            withDisplay.invoke(taskManager, MAX_TASKS, false, false, displayId)
+        } else {
+            methods.first { it.parameterTypes.size == 3 }.invoke(taskManager, MAX_TASKS, false, false)
+        } as List<*>
+        val displayField = TASK_INFO.getField("displayId")
+        return tasks.filterNotNull().filter { displayField.getInt(it) == displayId }
+    }
+
     /** 只有 DOWN 注入失败才退回命令；DOWN 已送达后退回会造成一次多余的完整动作。 */
     private inline fun injectPair(down: InputEvent, up: InputEvent, displayId: Int, fallback: () -> Boolean): Boolean {
         if (!inject(down, displayId)) return fallback()
@@ -322,7 +390,11 @@ internal class PhoneShellService(
         private const val TAG = "EtaPhoneShell"
         private const val SHELL_PACKAGE = "com.android.shell"
         private const val MIUI_LAUNCHER = "com.miui.home"
+        private const val MAX_TASKS = 100
         private const val TAP_MS = 50L
+        // injectStroke 一笔的上限：点数、从按下到抬起的毫秒数
+        private const val STROKE_MAX_POINTS = 1_024
+        private const val STROKE_MAX_MS = 10_000L
         private const val SWIPE_MIN_MS = 100
         private const val SWIPE_MAX_MS = 5_000
         private const val SWIPE_STEP_MS = 16L
@@ -335,6 +407,9 @@ internal class PhoneShellService(
         const val START_NOT_FOUND = 1
         const val START_ERROR = 2
         const val START_BLACKLISTED = 3
+
+        /** 目标 App 正在主屏（display 0）可见使用中，为不打扰用户拒绝拉到虚拟屏 */
+        const val START_IN_USE_ON_MAIN = 4
 
         /** MIUI 官方小窗黑名单（framework 静态 FREEFORM_BLACK_LIST + AMS 云控名单），读失败视为空。 */
         private fun miuiFreeformBlacklist(): Set<String> = runCatching {
@@ -374,6 +449,9 @@ internal class PhoneShellService(
 
         // WindowManager.DISPLAY_IME_POLICY_LOCAL = 0
         private const val IME_POLICY_LOCAL = 0
+
+        /** android.app.TaskInfo，反射取字段用 */
+        private val TASK_INFO: Class<*> by lazy { Class.forName("android.app.TaskInfo") }
 
         /** 找出以 argv0 为进程名的其它进程，避免残留多个助手。 */
         internal fun killOtherInstances(argv0: String) {

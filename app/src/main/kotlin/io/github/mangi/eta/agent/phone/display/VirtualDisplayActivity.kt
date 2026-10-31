@@ -161,11 +161,16 @@ internal object PhoneDisplayRegistry {
     @Volatile
     private var instance: VirtualDisplayController? = null
 
-    fun controller(context: Context): VirtualDisplayController = instance ?: synchronized(this) {
-        instance ?: VirtualDisplayController(
-            context.applicationContext,
-            AndroidAgentLogger,
-            io.github.mangi.eta.agent.device.BoundedRootCommandExecutor(AndroidAgentLogger),
-        ).also { instance = it }
+    fun controller(context: Context): VirtualDisplayController {
+        // Agent 工具侧的控制器可能已持有虚拟屏（常驻通知的 owner 就是它）：
+        // 优先复用，保证接管窗镜像/释放的就是 Agent 正在用的那块屏
+        VirtualDisplayNotifier.owner?.let { return it }
+        return instance ?: synchronized(this) {
+            instance ?: VirtualDisplayController(
+                context.applicationContext,
+                AndroidAgentLogger,
+                io.github.mangi.eta.agent.device.BoundedRootCommandExecutor(AndroidAgentLogger),
+            ).also { instance = it }
+        }
     }
 }

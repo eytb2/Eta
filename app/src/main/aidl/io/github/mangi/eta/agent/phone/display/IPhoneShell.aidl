@@ -14,7 +14,7 @@ interface IPhoneShell {
     // 撤掉这块屏（DESTROY_CONTENT_ON_REMOVAL，其上的 App 一并结束）
     void releaseDisplay(int displayId) = 3;
     // 在这块屏上启动 App；activity 为空时用包的 launcher 入口。
-    // 0=成功 1=找不到入口 2=出错
+    // 0=成功 1=找不到入口 2=出错 4=该 App 正在主屏（display 0）可见使用中，拒绝启动
     int startApp(int displayId, String packageName, String activity) = 4;
     // 注入按键（白名单内）；失败返回 false
     boolean injectKey(int displayId, int keyCode) = 5;
@@ -31,4 +31,7 @@ interface IPhoneShell {
     // windowingMode=5 + bounds + setMiuiConfigFlag(2)，startActivityAsUser(callingPackage=launcher)。
     // 0=成功 1=找不到入口 2=出错 3=MIUI 小窗黑名单
     int startSmallWindow(String packageName, String activity) = 11;
+    // 一根手指的一笔：按下、按 times 逐点移动、在最后一点抬起；事件到点才注入。
+    // xs/ys/times 等长（2..1024 点），times[0]=0 且逐点不减、总时长 ≤10s；失败返回 false
+    boolean injectStroke(int displayId, in int[] xs, in int[] ys, in long[] times) = 12;
 }

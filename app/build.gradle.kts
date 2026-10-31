@@ -63,13 +63,14 @@ android {
         debug {
             // 版本名带构建类型标记，设置页与 APK 文件名据此区分 Debug 包
             versionNameSuffix = "-debug" + buildMetadataSuffix
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             isPseudoLocalesEnabled = true
         }
         release {
             versionNameSuffix = buildMetadataSuffix
             signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = true
+            // 资源收缩在 arm64 aapt2 替换链路上产出损坏 APK（缺 AndroidManifest/resources.arsc），本机先关闭
             isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

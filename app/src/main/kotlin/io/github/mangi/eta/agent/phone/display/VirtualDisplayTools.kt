@@ -65,6 +65,7 @@ internal class VirtualDisplayTools(
         return when (val code = controller.startApp(packageName, activity)) {
             PhoneShellService.START_OK -> JSONObject().put("ok", true).put("started", true)
             PhoneShellService.START_NOT_FOUND -> error("START_NOT_FOUND", "找不到该包的可启动入口")
+            PhoneShellService.START_IN_USE_ON_MAIN -> error("START_IN_USE_ON_MAIN", "该 App 正在主屏使用中，为避免打扰已拒绝在虚拟屏启动")
             else -> error("START_FAILED", "启动失败（code=$code；屏未创建或助手不可用）")
         }
     }

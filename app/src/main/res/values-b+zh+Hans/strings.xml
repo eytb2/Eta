@@ -1457,4 +1457,9 @@
   <string name="virtual_display_takeover_title">虚拟屏接管</string>
   <string name="virtual_display_takeover_close">关闭</string>
   <string name="virtual_display_takeover_none">未创建</string>
+  <string name="virtual_display_notif_channel">虚拟屏</string>
+  <string name="virtual_display_notif_title">虚拟屏运行中</string>
+  <string name="virtual_display_notif_no_app">未启动应用</string>
+  <string name="virtual_display_notif_action_takeover">打开接管窗</string>
+  <string name="virtual_display_notif_action_release">释放虚拟屏</string>
 </resources>
