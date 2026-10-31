@@ -18,6 +18,10 @@ internal object MiuiSmallWindow {
 
     /**
      * 以 MIUI 小窗启动 [intent] 指向的 Activity。
+     *
+     * 注意：小窗参数只对“新建任务”生效——目标已有后台任务时会复用并全屏打开。
+     * 调用方负责先结束目标任务（如 am force-stop）或加 FLAG_ACTIVITY_MULTIPLE_TASK。
+     *
      * @return 成功返回 null；失败返回用户可读的错误描述。
      */
     @SuppressLint("PrivateApi", "DiscouragedPrivateApi")
