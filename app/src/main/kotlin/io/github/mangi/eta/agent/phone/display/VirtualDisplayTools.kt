@@ -106,9 +106,9 @@ internal class VirtualDisplayTools(
     }
 
     private fun takeover(): JSONObject {
-        val err = controller.openTakeoverWindow()
+        val err = controller.migrateToSmallWindow()
         return if (err == null) {
-            JSONObject().put("ok", true).put("message", "接管小窗已打开（MIUI 原生小窗）")
+            JSONObject().put("ok", true).put("message", "App 已迁移为 MIUI 原生小窗（原生渲染与触摸），虚拟屏已释放")
         } else {
             error("TAKEOVER_FAILED", err)
         }

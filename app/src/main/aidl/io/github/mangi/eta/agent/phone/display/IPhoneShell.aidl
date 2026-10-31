@@ -34,4 +34,9 @@ interface IPhoneShell {
     // 一根手指的一笔：按下、按 times 逐点移动、在最后一点抬起；事件到点才注入。
     // xs/ys/times 等长（2..1024 点），times[0]=0 且逐点不减、总时长 ≤10s；失败返回 false
     boolean injectStroke(int displayId, in int[] xs, in int[] ys, in long[] times) = 12;
+    // 把这块屏上的 App 迁移为 MIUI 原生小窗（真屏）：黑名单检查 → 结束目标在
+    // 虚拟屏与主屏后台的任务（保留进程）→ 复用 startSmallWindow 新建小窗任务。
+    // packageName 为空时取屏上最上面的任务；activity 为空时用包的 launcher 入口。
+    // 0=成功 1=找不到入口 2=出错 3=MIUI 小窗黑名单 4=正在主屏使用中，拒绝迁移
+    int migrateDisplayAppToSmallWindow(int displayId, String packageName, String activity) = 13;
 }

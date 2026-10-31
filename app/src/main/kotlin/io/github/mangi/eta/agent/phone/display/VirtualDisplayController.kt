@@ -150,11 +150,28 @@ internal class VirtualDisplayController(
         )
     }
 
-    /** 以 MIUI 原生小窗打开真屏侧接管窗（镜像虚拟屏 + 触摸透传）。 */
-    fun openTakeoverWindow(): String? {
-        val intent = android.content.Intent(context, VirtualDisplayActivity::class.java)
-            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-        return MiuiSmallWindow.start(context, intent, context.packageName)
+    /**
+     * 接管 = 把虚拟屏上的 App 迁移为 MIUI 原生小窗（真屏），并释放虚拟屏。
+     * 相比镜像 surface 的旧方案：原生渲染与触摸、无缩放裁切、单层合成不卡，
+     * 也不再占用虚拟屏取帧通道（2026-10-31 真机对比后拍板）。
+     * @return 成功返回 null；失败返回用户可读错误。
+     */
+    fun migrateToSmallWindow(): String? {
+        val display = _display.value ?: return "虚拟屏未创建"
+        val shell = shell() ?: return "Root 助手未就绪"
+        val code = runCatching {
+            shell.migrateDisplayAppToSmallWindow(display.displayId, lastStartedPackage, null)
+        }.getOrDefault(PhoneShellService.START_ERROR)
+        if (code != PhoneShellService.START_OK) {
+            return when (code) {
+                PhoneShellService.START_NOT_FOUND -> "虚拟屏上没有可迁移的 App（或找不到启动入口）"
+                PhoneShellService.START_BLACKLISTED -> "该 App 在 MIUI 小窗黑名单中（小米官方标注不适合小窗，如相机/支付/游戏类）"
+                PhoneShellService.START_IN_USE_ON_MAIN -> "该 App 正在主屏使用中（可能已开着小窗），未迁移"
+                else -> "迁移失败（code=$code）。若刚更新过 Eta，请强停 App 重启以重建 Root 助手"
+            }
+        }
+        release()
+        return null
     }
 
     fun release() {

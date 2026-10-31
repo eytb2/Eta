@@ -85,7 +85,7 @@ internal object AgentVirtualDisplayToolCatalog {
         tools.put(
             AgentToolSchema.function(
                 name = "virtual_display_takeover",
-                description = "在真屏上以 MIUI 原生小窗打开虚拟屏接管窗：实时镜像虚拟屏画面，用户可在小窗内直接触摸操作虚拟屏；关闭小窗后 Agent 截图自动恢复。需要 Root。",
+                description = "把虚拟屏上正在运行的 App 迁移为 MIUI 原生小窗（真屏）：原生渲染与触摸、无缩放裁切，会话状态保留；成功后虚拟屏释放。App 正在主屏使用中、或在小窗黑名单时拒绝迁移。需要 Root。",
                 parameters = parameters(JSONObject()),
             ),
         )

@@ -271,6 +271,34 @@ internal class PhoneShellService(
         }
     }
 
+    /**
+     * 把这块屏上的 App 迁移为 MIUI 原生小窗（真屏）：MIUI 小窗 options 只对新建任务
+     * 生效，所以先结束目标在虚拟屏与主屏后台的任务（保留进程，推送不断），正在主屏
+     * 被用户看着时拒绝迁移；随后复用 [startSmallWindow] 新建小窗任务。
+     * packageName 为空时取该屏最上面的任务。
+     */
+    override fun migrateDisplayAppToSmallWindow(displayId: Int, packageName: String?, activity: String?): Int {
+        if (!ownDisplay(displayId)) return START_ERROR
+        val target = packageName?.takeIf { it.isNotBlank() }
+            ?: tasksOn(displayId).firstOrNull()?.let { task -> packagesOf(task).firstOrNull() }
+            ?: return START_NOT_FOUND
+        if (target in miuiFreeformBlacklist()) return START_BLACKLISTED
+        // 先确认启动入口存在，避免任务已结束却启动不了、App 卡在后台的中间态
+        val launch = context.packageManager.getLaunchIntentForPackage(target)?.component
+            ?: return START_NOT_FOUND
+        if (inUseOnMainScreen(target)) return START_IN_USE_ON_MAIN
+        // 移除目标在虚拟屏与主屏后台的旧任务；小窗 options 只有新建任务才会应用 bounds
+        val mine = (tasksOn(Display.DEFAULT_DISPLAY) + tasksOn(displayId))
+            .filter { target in packagesOf(it) }
+        val taskIds = mine.mapNotNull { runCatching { TASK_INFO.getField("taskId").getInt(it) }.getOrNull() }
+        var ready = taskIds.isEmpty() // 本就没有旧任务，直接新建即可
+        for (taskId in taskIds) {
+            if (removeTask(taskId, target)) ready = true
+        }
+        if (!ready) return START_ERROR
+        return startSmallWindow(target, activity ?: launch.className)
+    }
+
     override fun releaseAll() {
         synchronized(displays) { displays.values.toList().also { displays.clear() } }.forEach { vd ->
             runCatching { vd.release() }
@@ -303,6 +331,26 @@ internal class PhoneShellService(
         return tasksOn(Display.DEFAULT_DISPLAY).withIndex().any { (index, task) ->
             packageName in packagesOf(task) && (visibleField?.getBoolean(task) ?: (index == 0))
         }
+    }
+
+    /**
+     * 反射 IActivityTaskManager.removeTask 结束任务：任务消失、进程保留（推送不断）。
+     * 反射失败退回 force-stop 整包（后台服务会重启，代价可接受）。
+     */
+    private fun removeTask(taskId: Int, fallbackPackage: String): Boolean {
+        val ok = runCatching {
+            taskManager.javaClass.methods.firstOrNull {
+                it.name == "removeTask" && it.parameterTypes.firstOrNull() == Int::class.javaPrimitiveType
+            }?.let { m ->
+                if (m.parameterTypes.size == 1) {
+                    m.invoke(taskManager, taskId) as Boolean
+                } else {
+                    m.invoke(taskManager, taskId, true) as Boolean
+                }
+            }
+        }.onFailure { Log.w(TAG, "removeTask($taskId) failed", it) }.getOrNull()
+        if (ok == true) return true
+        return exec("am", "force-stop", fallbackPackage) == 0
     }
 
     /**
