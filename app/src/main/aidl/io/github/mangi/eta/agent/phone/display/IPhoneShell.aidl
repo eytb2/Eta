@@ -27,4 +27,8 @@ interface IPhoneShell {
     void releaseAll() = 9;
     // releaseAll 后退出进程
     void destroy() = 10;
+    // 以 MIUI 小窗启动组件（真屏）：root 身份手动构造 options，
+    // windowingMode=5 + bounds + setMiuiConfigFlag(2)，startActivityAsUser(callingPackage=launcher)。
+    // 0=成功 1=找不到入口 2=出错 3=MIUI 小窗黑名单
+    int startSmallWindow(String packageName, String activity) = 11;
 }

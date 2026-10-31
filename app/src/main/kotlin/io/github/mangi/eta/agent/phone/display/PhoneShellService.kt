@@ -183,6 +183,55 @@ internal class PhoneShellService(
 
     override fun identity(): IntArray = intArrayOf(Process.myUid(), Process.myPid())
 
+    /**
+     * 以 MIUI 小窗启动真屏组件。Root 身份手动构造 ActivityOptions
+     * （windowingMode=5 + 居中 bounds + setMiuiConfigFlag(2)，不查任何 provider），
+     * 再经 IActivityTaskManager.startActivityAsUser 以 launcher 包名启动，绕过后台限制。
+     */
+    override fun startSmallWindow(packageName: String?, activity: String?): Int {
+        if (packageName.isNullOrBlank()) return START_ERROR
+        if (packageName in miuiFreeformBlacklist()) return START_BLACKLISTED
+        return try {
+            val intent = if (activity.isNullOrBlank()) {
+                context.packageManager.getLaunchIntentForPackage(packageName) ?: return START_NOT_FOUND
+            } else {
+                Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+                    .setClassName(packageName, activity)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (intent.component == null) return START_NOT_FOUND
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val dm = context.resources.displayMetrics
+            val w = dm.widthPixels
+            val h = dm.heightPixels
+            val fw = (w * 0.94f).toInt()
+            val fh = (h * 0.62f).toInt()
+            val top = (h * 0.28f).toInt()
+            val bounds = android.graphics.Rect((w - fw) / 2, top, (w - fw) / 2 + fw, top + fh)
+            val options = ActivityOptions.makeBasic()
+            ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
+                .invoke(options, 5)
+            options.setLaunchBounds(bounds)
+            runCatching {
+                val flag = ActivityOptions::class.java.getDeclaredMethod("setMiuiConfigFlag", Int::class.javaPrimitiveType)
+                flag.isAccessible = true
+                flag.invoke(options, 2)
+            }
+            val atm = Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null)
+            val start = atm.javaClass.methods.firstOrNull {
+                it.name == "startActivityAsUser" && it.parameterCount == 12
+            } ?: return START_ERROR
+            val result = start.invoke(
+                atm, null, MIUI_LAUNCHER, null, intent, null, null, null,
+                0, 0, null, options.toBundle(), -2,
+            ) as Int
+            if (result >= 0) START_OK else START_ERROR
+        } catch (t: Throwable) {
+            Log.w(TAG, "startSmallWindow failed", t)
+            START_ERROR
+        }
+    }
+
     override fun releaseAll() {
         synchronized(displays) { displays.values.toList().also { displays.clear() } }.forEach { vd ->
             runCatching { vd.release() }
@@ -272,6 +321,7 @@ internal class PhoneShellService(
     companion object {
         private const val TAG = "EtaPhoneShell"
         private const val SHELL_PACKAGE = "com.android.shell"
+        private const val MIUI_LAUNCHER = "com.miui.home"
         private const val TAP_MS = 50L
         private const val SWIPE_MIN_MS = 100
         private const val SWIPE_MAX_MS = 5_000
@@ -284,6 +334,21 @@ internal class PhoneShellService(
         const val START_OK = 0
         const val START_NOT_FOUND = 1
         const val START_ERROR = 2
+        const val START_BLACKLISTED = 3
+
+        /** MIUI 官方小窗黑名单（framework 静态 FREEFORM_BLACK_LIST + AMS 云控名单），读失败视为空。 */
+        private fun miuiFreeformBlacklist(): Set<String> = runCatching {
+            val adapter = Class.forName("android.util.MiuiMultiWindowAdapter")
+            @Suppress("UNCHECKED_CAST")
+            val staticList = adapter.getField("FREEFORM_BLACK_LIST").get(null) as? List<String> ?: emptyList()
+            val am = Class.forName("android.app.ActivityManager").getMethod("getService").invoke(null)
+            val cloudList = runCatching {
+                @Suppress("UNCHECKED_CAST")
+                am.javaClass.methods.firstOrNull { it.name == "getFreeformBlackList" && it.parameterCount == 0 }
+                    ?.invoke(am) as? List<String> ?: emptyList()
+            }.getOrDefault(emptyList())
+            staticList + cloudList
+        }.getOrDefault(emptyList()).toSet()
 
         private val ALLOWED_KEYS = setOf(
             KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_MENU,
