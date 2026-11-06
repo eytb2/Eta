@@ -64,6 +64,16 @@ internal interface ProviderDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertModels(models: List<ProviderModelEntity>)
 
+    /**
+     * 写入从服务商溢出报错中检测到的真实上下文窗口（2026-11-01 自适应）：
+     * 检测值来自服务商自身，比目录预估更权威；无条件下覆盖。
+     */
+    @Query(
+        "UPDATE provider_models SET context_window = :window " +
+            "WHERE provider_id = :providerId AND model_id = :modelId"
+    )
+    suspend fun updateDetectedContextWindow(providerId: String, modelId: String, window: Int)
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertModelsIgnoringConflicts(models: List<ProviderModelEntity>)
 

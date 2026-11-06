@@ -58,7 +58,9 @@ import io.github.mangi.eta.ui.model.AgentModelPickerProjector
 import io.github.mangi.eta.ui.model.AgentModelPickerUiState
 import io.github.mangi.eta.ui.model.ConversationModeUi
 import io.github.mangi.eta.ui.model.ConversationPaneUiState
+import io.github.mangi.eta.data.db.EtaDatabase
 import io.github.mangi.eta.ui.model.ConversationSummaryUi
+import io.github.mangi.eta.ui.model.ConversationStatsUi
 import io.github.mangi.eta.ui.model.ConversationHistoryLoadState
 import io.github.mangi.eta.ui.model.MessageEditUiState
 import io.github.mangi.eta.ui.model.PendingFileReferenceUi
@@ -92,6 +94,8 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 
 internal class AgentAppState(
     context: Context,
@@ -137,6 +141,11 @@ internal class AgentAppState(
     private var conversationsById: Map<String, AgentChatHomeUiState> = initialConversations.conversationsById
     private var conversationTitles: Map<String, String> = initialConversations.titles
     private var conversationUpdatedAt: Map<String, Long> = initialConversations.updatedAt
+
+    // 置顶/归档（长按菜单）：轻量标记，存独立 prefs，不进会话存储（2026-11-01）。
+    private val conversationPrefs = appContext.getSharedPreferences("eta_agent_preferences", Context.MODE_PRIVATE)
+    private var conversationPinned: Map<String, Long> = loadConversationPinned()
+    private var conversationArchived: Set<String> = loadConversationArchived()
 
     var homeState by mutableStateOf(
         selectedConversationId?.let(conversationsById::get) ?: emptyChatState(defaultThinkingEnabled)
@@ -1052,6 +1061,14 @@ internal class AgentAppState(
         conversationsById = conversationsById - conversationId
         conversationTitles = conversationTitles - conversationId
         conversationUpdatedAt = conversationUpdatedAt - conversationId
+        if (conversationId in conversationPinned || conversationId in conversationArchived) {
+            conversationPinned = conversationPinned - conversationId
+            conversationArchived = conversationArchived - conversationId
+            conversationPrefs.edit()
+                .putString("agent_conversation_pinned", JSONObject(conversationPinned).toString())
+                .putString("agent_conversation_archived", JSONArray(conversationArchived.toList()).toString())
+                .apply()
+        }
         if (wasSelected) {
             conversationSelectionVersion += 1
             cancelHistoryPageLoad()
@@ -1088,6 +1105,55 @@ internal class AgentAppState(
         refreshConversationSummaries()
         persistConversations()
     }
+
+    /** 置顶/取消置顶：置顶会话排在列表最前，行内显示图钉。 */
+    fun pinConversation(conversationId: String, pinned: Boolean) {
+        conversationPinned = if (pinned) {
+            conversationPinned + (conversationId to System.currentTimeMillis())
+        } else {
+            conversationPinned - conversationId
+        }
+        conversationPrefs.edit()
+            .putString("agent_conversation_pinned", JSONObject(conversationPinned).toString())
+            .apply()
+        refreshConversationSummaries()
+    }
+
+    /** 归档/取消归档：归档会话从主列表隐藏，在侧栏"已归档"区展示。 */
+    fun archiveConversation(conversationId: String, archived: Boolean) {
+        conversationArchived = if (archived) conversationArchived + conversationId else conversationArchived - conversationId
+        conversationPrefs.edit()
+            .putString("agent_conversation_archived", JSONArray(conversationArchived.toList()).toString())
+            .apply()
+        refreshConversationSummaries()
+    }
+
+    /** "会话信息"：消息数与 token 聚合（Room 实时值）+ 会话时间。 */
+    suspend fun conversationStats(conversationId: String): ConversationStatsUi? {
+        if (conversationId !in conversationsById) return null
+        val row = EtaDatabase.get(appContext).conversationDao().conversationStats(conversationId)
+        return ConversationStatsUi(
+            messageCount = row.messageCount,
+            inputTokens = row.inputTokens,
+            outputTokens = row.outputTokens,
+            createdAtMillis = 0L,
+            updatedAtMillis = conversationUpdatedAt[conversationId] ?: 0L,
+        )
+    }
+
+    private fun loadConversationPinned(): Map<String, Long> = runCatching {
+        val raw = appContext.getSharedPreferences("eta_agent_preferences", Context.MODE_PRIVATE)
+            .getString("agent_conversation_pinned", null) ?: return emptyMap()
+        val obj = JSONObject(raw)
+        buildMap { for (key in obj.keys()) put(key, obj.optLong(key)) }
+    }.getOrDefault(emptyMap())
+
+    private fun loadConversationArchived(): Set<String> = runCatching {
+        val raw = appContext.getSharedPreferences("eta_agent_preferences", Context.MODE_PRIVATE)
+            .getString("agent_conversation_archived", null) ?: return emptySet()
+        val array = JSONArray(raw)
+        buildSet { for (index in 0 until array.length()) add(array.optString(index)) }
+    }.getOrDefault(emptySet())
 
     suspend fun exportConversationMarkdown(conversationId: String): String? {
         if (conversationId !in conversationsById) return null
@@ -2224,10 +2290,17 @@ internal class AgentAppState(
     }
 
     private fun refreshConversationSummaries() {
+        // 置顶优先（组内按更新时间），归档会话从主列表分离到"已归档"区。
+        val buildSummary: (String, AgentChatHomeUiState) -> ConversationSummaryUi = { id, state ->
+            buildConversationSummary(id, state)
+        }
         val summaries = conversationsById.entries
-            .sortedByDescending { (id, _) ->
-                conversationUpdatedAt[id] ?: 0L
-            }
+            .filter { (id, _) -> id !in conversationArchived }
+            .sortedWith(
+                compareByDescending<Map.Entry<String, AgentChatHomeUiState>> { (id, _) ->
+                    conversationPinned.containsKey(id)
+                }.thenByDescending { (id, _) -> conversationUpdatedAt[id] ?: 0L },
+            )
             .map { (id, state) ->
                 val lastMessage = state.messages.lastOrNull()
                 ConversationSummaryUi(
@@ -2278,21 +2351,90 @@ internal class AgentAppState(
                         GuiControlStatus.UserPaused -> appContext.getString(R.string.run_gui_user_paused)
                         else -> null
                     },
+                    isPinned = id in conversationPinned,
                 )
             }
         val query = conversationPaneState.searchQuery.trim()
+        val visibleSummaries = if (query.isBlank()) {
+            summaries
+        } else {
+            contentMatchCache.keys.retainAll(conversationsById.keys)
+            summaries.filter { summary ->
+                summary.title.contains(query, ignoreCase = true) ||
+                    summary.preview.contains(query, ignoreCase = true) ||
+                    summary.id in persistedSearchMatches || conversationContentMatches(summary.id, query)
+            }
+        }
+        val archivedSummaries = conversationsById.entries
+            .filter { (id, _) -> id in conversationArchived }
+            .sortedByDescending { (id, _) -> conversationUpdatedAt[id] ?: 0L }
+            .map { (id, state) -> buildSummary(id, state).copy(isArchived = true) }
+            .let { archived ->
+                if (query.isBlank()) archived else archived.filter { summary ->
+                    summary.title.contains(query, ignoreCase = true) ||
+                        summary.preview.contains(query, ignoreCase = true)
+                }
+            }
         conversationPaneState = conversationPaneState.copy(
             selectedConversationId = selectedConversationId,
-            conversations = if (query.isBlank()) {
-                summaries
-            } else {
-                contentMatchCache.keys.retainAll(conversationsById.keys)
-                summaries.filter { summary ->
-                    summary.title.contains(query, ignoreCase = true) ||
-                        summary.preview.contains(query, ignoreCase = true) ||
-                        summary.id in persistedSearchMatches || conversationContentMatches(summary.id, query)
-                }
+            conversations = visibleSummaries,
+            archivedConversations = archivedSummaries,
+        )
+    }
+
+    /** 会话摘要构建（主列表与"已归档"区共用）。 */
+    private fun buildConversationSummary(id: String, state: AgentChatHomeUiState): ConversationSummaryUi {
+        val lastMessage = state.messages.lastOrNull()
+        return ConversationSummaryUi(
+            id = id,
+            title = conversationTitles[id].orEmpty().ifBlank {
+                appContext.getString(R.string.conversation_unnamed)
             },
+            preview = when (lastMessage) {
+                is UserMessageUi -> AgentFileReferencePromptCodec
+                    .parse(lastMessage.content)
+                    .let { parsed ->
+                        AgentFileReferencePolicy.titleSource(
+                            request = parsed.request,
+                            references = parsed.references,
+                        )
+                    }
+                is AgentMessageUi -> lastMessage.content.ifBlank {
+                    appContext.getString(R.string.conversation_preview_reasoning)
+                }
+                is SystemNoticeMessageUi -> noticeText(lastMessage.code)
+                is ThinkingMessageUi -> appContext.getString(R.string.conversation_preview_reasoning)
+                is ToolActivityMessageUi -> appContext.getString(
+                    R.string.conversation_preview_tool_call,
+                    lastMessage.toolName,
+                )
+                else -> appContext.getString(R.string.conversation_preview_empty)
+            }.take(MAX_PREVIEW_CHARS),
+            timeLabel = if (state.isStreaming) {
+                appContext.getString(R.string.time_now)
+            } else {
+                conversationUpdatedAt[id]?.let { timestamp ->
+                    ConversationTimeLabels.label(
+                        timestampMillis = timestamp,
+                        locale = appContext.resources.configuration.locales[0],
+                        use24HourClock = DateFormat.is24HourFormat(appContext),
+                        yesterdayLabel = appContext.getString(R.string.time_yesterday),
+                        recentLabel = appContext.getString(R.string.time_recent),
+                    )
+                } ?: appContext.getString(R.string.time_recent)
+            },
+            updatedAtMillis = conversationUpdatedAt[id] ?: 0L,
+            mode = ConversationModeUi.Chat,
+            characterName = state.roleplay?.characterName ?: state.conversationCharacterName,
+            characterAvatarPath = state.roleplay?.avatarPath ?: state.conversationCharacterAvatarPath,
+            isActiveRun = state.isStreaming,
+            runStatus = when (runStore.guiStatus(id)) {
+                GuiControlStatus.Waiting -> appContext.getString(R.string.run_waiting_for_gui)
+                GuiControlStatus.UserPaused -> appContext.getString(R.string.run_gui_user_paused)
+                else -> null
+            },
+            isPinned = id in conversationPinned,
+            isArchived = id in conversationArchived,
         )
     }
 

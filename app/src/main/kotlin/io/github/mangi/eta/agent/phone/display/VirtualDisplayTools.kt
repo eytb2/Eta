@@ -20,6 +20,7 @@ internal class VirtualDisplayTools(
         "virtual_display_create", "virtual_display_start_app", "virtual_display_screenshot",
         "virtual_display_tap", "virtual_display_swipe", "virtual_display_key",
         "virtual_display_release", "virtual_display_status", "virtual_display_takeover",
+        "virtual_display_present_to_user",
     )
 
     fun execute(name: String, arguments: JSONObject): JSONObject {
@@ -34,6 +35,7 @@ internal class VirtualDisplayTools(
                 "virtual_display_key" -> key(arguments)
                 "virtual_display_release" -> release()
                 "virtual_display_takeover" -> takeover()
+                "virtual_display_present_to_user" -> presentToUser()
                 else -> status()
             }
         } catch (t: Throwable) {
@@ -114,6 +116,19 @@ internal class VirtualDisplayTools(
         }
     }
 
+    /** present_to_user：把驻留小窗的任务无损移交主屏全屏（付款/扫码/安全页临门一脚） */
+    private fun presentToUser(): JSONObject {
+        val err = controller.presentToUser()
+        return if (err == null) {
+            JSONObject().put("ok", true).put(
+                "message",
+                "任务已无损移交主屏全屏（页面状态保留）。用户操作完后可用虚拟屏迁移把它收回，或保持主屏继续使用",
+            )
+        } else {
+            error("PRESENT_FAILED", err)
+        }
+    }
+
     private fun release(): JSONObject {
         controller.release()
         return JSONObject().put("ok", true).put("released", true)
@@ -128,6 +143,9 @@ internal class VirtualDisplayTools(
             .put("height", s.height)
             .put("takeover_active", s.takeover)
             .put("helper_alive", s.helperAlive)
+            .put("migrated_package", s.migrated ?: JSONObject.NULL)
+            .put("migrated_width", s.migratedWidth)
+            .put("migrated_height", s.migratedHeight)
     }
 
     private fun injectResult(ok: Boolean, what: String): JSONObject =

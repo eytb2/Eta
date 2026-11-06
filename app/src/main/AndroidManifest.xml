@@ -105,7 +105,7 @@
 
         <!-- 虚拟屏常驻通知上的"释放虚拟屏"按钮：只收本应用自己发出的显式广播 -->
         <receiver
-            android:name=".agent.phone.display.VirtualDisplayReleaseReceiver"
+            android:name=".agent.phone.display.VirtualDisplayActionReceiver"
             android:exported="false" />
 
         <service

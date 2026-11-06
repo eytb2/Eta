@@ -39,4 +39,14 @@ interface IPhoneShell {
     // packageName 为空时取屏上最上面的任务；activity 为空时用包的 launcher 入口。
     // 0=成功 1=找不到入口 2=出错 3=MIUI 小窗黑名单 4=正在主屏使用中，拒绝迁移
     int migrateDisplayAppToSmallWindow(int displayId, String packageName, String activity) = 13;
+    // 该屏上所有任务的包名（去重、按最近使用排序）；屏不存在返回空数组
+    String[] taskPackagesOnDisplay(int displayId) = 14;
+    // 该包（含 :子进程）是否有存活进程；空名返回 false
+    boolean processAlive(String packageName) = 15;
+    // 无损迁移（参考官方 v3.4.0 handoffToMainDisplay）：把 packageName 的任务迁移到
+    // targetDisplayId。freeform=true 时迁移前后设置 WINDOWING_MODE_FREEFORM，
+    // bounds 为 "L,T,R,B"（空串不设置）。Activity 不重建、页面状态保留。失败返回 false
+    boolean relocateTask(String packageName, int targetDisplayId, boolean freeform, String bounds) = 16;
+    // 设置该包（含 :子进程）的音频焦点为忽略/恢复（虚拟屏后台应用防抢主屏音频）
+    boolean setPackageAudioFocus(String packageName, boolean ignore) = 17;
 }

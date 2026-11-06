@@ -12,6 +12,8 @@ internal class AgentModelFailure(
     val retryable: Boolean,
     message: String,
     cause: Throwable? = null,
+    /** 从溢出报错里解析出的服务商真实上下文窗口；null 表示报错未携带数字。 */
+    val detectedContextWindow: Int? = null,
 ) : IllegalStateException(message, cause) {
     companion object {
         private val transientStatus = setOf(408, 429, 500, 502, 503, 504, 524, 529)
@@ -35,6 +37,7 @@ internal class AgentModelFailure(
             authenticationFailure(error)?.let { return it }
             if (isContextOverflow(error)) return AgentModelFailure(
                 "CONTEXT_OVERFLOW", false, "模型上下文超过容量限制。",
+                detectedContextWindow = extractContextWindow(body),
             )
             val permanent = isPermanent(error, body)
             if (status == 400 && includeParameterDetails && !permanent) {
@@ -90,6 +93,35 @@ internal class AgentModelFailure(
                 "MODEL_CONNECTION_FAILED", true, "模型连接中断或暂时无法建立，请检查网络与服务商状态。", failure,
             )
             else -> null
+        }
+
+        private val overflowPatterns = listOf(
+            // OpenAI 系：This model's maximum context length is 131072 tokens
+            Regex("maximum context length[^0-9]{0,40}(\\d{4,12})"),
+            // Anthropic 系：prompt is too long: 200500 tokens > 200000 maximum
+            Regex(">\\s*(\\d{4,12})[^0-9]{0,20}maximum"),
+            // Gemini 系：exceeds the maximum number of tokens allowed (1000000)
+            Regex("maximum number of tokens allowed\\s*\\((\\d{4,12})"),
+            // DeepSeek/GLM 网关：exceeds the maximum: 65536
+            Regex("maximum[^0-9]{0,10}(\\d{4,12})"),
+            // 通用网关：... 131072 tokens maximum / 131072 maximum
+            Regex("(\\d{4,12})[^0-9]{0,20}maximum"),
+            // 其他：context length/window 附近带数字
+            Regex("context (?:length|window)[^0-9]{0,40}(\\d{4,12})"),
+        )
+
+        /**
+         * 从溢出报错原文提取服务商真实上下文窗口（用于自动回填 provider_models，
+         * 让预防性压缩对任何新模型自适应）。多个正则按服务商格式优先级尝试，
+         * 取第一个落在 1K~100M 合理区间的数字。
+         */
+        private fun extractContextWindow(body: String): Int? {
+            val lowered = body.lowercase()
+            for (pattern in overflowPatterns) {
+                val value = pattern.find(lowered)?.groupValues?.get(1)?.toIntOrNull() ?: continue
+                if (value in 1_000..100_000_000) return value
+            }
+            return null
         }
 
         private fun isContextOverflow(error: JSONObject?): Boolean {

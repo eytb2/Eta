@@ -1462,4 +1462,17 @@
   <string name="virtual_display_notif_no_app">未启动应用</string>
   <string name="virtual_display_notif_action_takeover">打开接管窗</string>
   <string name="virtual_display_notif_action_release">释放虚拟屏</string>
+  <string name="action_pin">置顶</string>
+  <string name="action_unpin">取消置顶</string>
+  <string name="action_archive">归档</string>
+  <string name="action_unarchive">取消归档</string>
+  <string name="action_copy_conversation">复制会话全文</string>
+  <string name="action_copy_conversation_id">复制会话 ID</string>
+  <string name="action_conversation_info">会话信息</string>
+  <string name="conversation_info_title">会话信息</string>
+  <string name="conversation_info_messages">消息数</string>
+  <string name="conversation_info_tokens">Token（输入 / 输出）</string>
+  <string name="conversation_info_updated">最近更新</string>
+  <string name="conversation_copied">已复制到剪贴板</string>
+  <string name="conversation_archived_section">已归档 (%1$d)</string>
 </resources>

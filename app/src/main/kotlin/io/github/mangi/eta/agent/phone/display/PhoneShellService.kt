@@ -38,6 +38,9 @@ internal class PhoneShellService(
 ) : IPhoneShell.Stub() {
     private val displays = HashMap<Int, VirtualDisplay>()
 
+    /** 已被静音音频焦点的包名：display 全部释放时恢复 */
+    private val mutedAudioPackages = LinkedHashSet<String>()
+
     // 不能用 getSystemService：那样拿到的 DisplayManager 绑定的是系统上下文，
     // 包名与调用 uid 对不上；按 mika 的做法反射构造并配 Root 的上下文。
     @SuppressLint("PrivateApi")
@@ -97,7 +100,7 @@ internal class PhoneShellService(
             }
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             val options = ActivityOptions.makeBasic().setLaunchDisplayId(displayId).toBundle()
-            val ok = try {
+            var ok = try {
                 val start = taskManager.javaClass.methods.first {
                     it.name == "startActivityAsUser" && it.parameterTypes.size == 12
                 }
@@ -114,7 +117,32 @@ internal class PhoneShellService(
                 val component = intent.component?.flattenToShortString() ?: return START_NOT_FOUND
                 exec("am", "start", "--display", "$displayId", "-n", component) == 0
             }
-            if (ok) START_OK else START_ERROR
+            // 发起成功不等于启动成功（实测：进程复活等场景 startActivityAsUser 返回>=0
+            // 但 Activity 未起，2026-11-01 真机复现）。验证任务真的出现在目标屏，
+            // 未出现则回退 am start（实测该路径可靠），仍失败才报错。
+            if (ok) {
+                ok = (0..5).any {
+                    SystemClock.sleep(500)
+                    runCatching { taskPackagesOnDisplay(displayId).any { p -> p == packageName } }
+                        .getOrDefault(false)
+                }
+                if (!ok) {
+                    Log.w(TAG, "startApp($packageName) not verified on display $displayId, fallback to am start")
+                    val component = intent.component?.flattenToShortString() ?: return START_NOT_FOUND
+                    ok = exec("am", "start", "--display", "$displayId", "-n", component) == 0 &&
+                        (0..2).any {
+                            SystemClock.sleep(400)
+                            runCatching { taskPackagesOnDisplay(displayId).any { p -> p == packageName } }
+                                .getOrDefault(false)
+                        }
+                }
+            }
+            if (ok) {
+                // 虚拟屏上的 App 不抢主屏音频焦点（收语音/放视频时主屏不受打断）
+                exec("cmd", "appops", "set", "--user", "0", packageName, "TAKE_AUDIO_FOCUS", "ignore")
+                synchronized(mutedAudioPackages) { mutedAudioPackages.add(packageName) }
+                START_OK
+            } else START_ERROR
         } catch (t: Throwable) {
             Log.e(TAG, "startApp failed", t)
             START_ERROR
@@ -247,24 +275,46 @@ internal class PhoneShellService(
             val fh = (h * 0.62f).toInt()
             val top = (h * 0.28f).toInt()
             val bounds = android.graphics.Rect((w - fw) / 2, top, (w - fw) / 2 + fw, top + fh)
-            val options = ActivityOptions.makeBasic()
-            ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
-                .invoke(options, 5)
-            options.setLaunchBounds(bounds)
-            runCatching {
-                val flag = ActivityOptions::class.java.getDeclaredMethod("setMiuiConfigFlag", Int::class.javaPrimitiveType)
-                flag.isAccessible = true
-                flag.invoke(options, 2)
-            }
             val atm = Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null)
             val start = atm.javaClass.methods.firstOrNull {
                 it.name == "startActivityAsUser" && it.parameterCount == 12
             } ?: return START_ERROR
-            val result = start.invoke(
-                atm, null, MIUI_LAUNCHER, null, intent, null, null, null,
-                0, 0, null, options.toBundle(), -2,
-            ) as Int
-            if (result >= 0) START_OK else START_ERROR
+            // 降级链：HyperOS 更新可能收紧 setMiuiConfigFlag / bounds 校验 /
+            // 非 Launcher 来源的 freeform 启动，逐层退化而不是整体失效
+            val variants: List<(ActivityOptions) -> Unit> = listOf(
+                { opt ->
+                    opt.setLaunchBounds(bounds)
+                    ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
+                        .invoke(opt, 5)
+                    runCatching {
+                        val flag = ActivityOptions::class.java.getDeclaredMethod("setMiuiConfigFlag", Int::class.javaPrimitiveType)
+                        flag.isAccessible = true
+                        flag.invoke(opt, 2)
+                    }
+                },
+                { opt ->
+                    // MiuiConfigFlag 被收紧时：仅标准 freeform + bounds
+                    opt.setLaunchBounds(bounds)
+                    ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
+                        .invoke(opt, 5)
+                },
+                { opt ->
+                    // bounds 也被拒时：仅 freeform（窗口位置交给系统）
+                    ActivityOptions::class.java.getMethod("setLaunchWindowingMode", Int::class.javaPrimitiveType)
+                        .invoke(opt, 5)
+                },
+            )
+            for ((index, apply) in variants.withIndex()) {
+                val options = ActivityOptions.makeBasic()
+                runCatching { apply(options) }
+                val result = start.invoke(
+                    atm, null, MIUI_LAUNCHER, null, intent, null, null, null,
+                    0, 0, null, options.toBundle(), -2,
+                ) as Int
+                if (result >= 0) return START_OK
+                Log.w(TAG, "startSmallWindow variant $index rejected (result=$result)")
+            }
+            START_ERROR
         } catch (t: Throwable) {
             Log.w(TAG, "startSmallWindow failed", t)
             START_ERROR
@@ -296,13 +346,141 @@ internal class PhoneShellService(
             if (removeTask(taskId, target)) ready = true
         }
         if (!ready) return START_ERROR
+        // 等 AMS 落定：被移除的任务真正消失后再启动。真机实测（2026-10-31）removeTask 后
+        // 立即 startActivity，新 intent 会被路由到正在 finish 的垂死任务（Duplicate finish
+        // request），新任务建不出来
+        val settleDeadline = SystemClock.uptimeMillis() + 2_000
+        while (SystemClock.uptimeMillis() < settleDeadline &&
+            (tasksOn(Display.DEFAULT_DISPLAY) + tasksOn(displayId)).any { target in packagesOf(it) }
+        ) {
+            SystemClock.sleep(100)
+        }
+        val code = startSmallWindow(target, activity ?: launch.className)
+        if (code != START_OK) return code
+        // 启动返回成功不代表任务建出来了：短等后确认，缺失则重试一次
+        SystemClock.sleep(600)
+        val created = (tasksOn(Display.DEFAULT_DISPLAY) + tasksOn(displayId)).any { target in packagesOf(it) }
+        if (created) return START_OK
         return startSmallWindow(target, activity ?: launch.className)
+    }
+
+    override fun taskPackagesOnDisplay(displayId: Int): Array<String> = try {
+        tasksOn(displayId).flatMap { packagesOf(it) }.distinct().toTypedArray()
+    } catch (t: Throwable) {
+        Log.w(TAG, "taskPackagesOnDisplay($displayId) failed", t)
+        emptyArray()
+    }
+
+    override fun processAlive(packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        return try {
+            val am = Class.forName("android.app.ActivityManager").getMethod("getService").invoke(null)
+            val processes = am.javaClass.methods.firstOrNull { it.name == "getRunningAppProcesses" }
+                ?.invoke(am) as? List<*>
+            processes?.any { process ->
+                val name = runCatching {
+                    process!!.javaClass.getField("processName").get(process) as? String
+                }.getOrNull()
+                // 精确包名或它的 :子进程（com.tencent.mm:push）
+                name != null && (name == packageName || name.startsWith("$packageName:"))
+            } ?: false
+        } catch (t: Throwable) {
+            Log.w(TAG, "processAlive($packageName) failed", t)
+            false
+        }
+    }
+
+    /**
+     * 无损迁移（自官方 v3.4.0 handoffToMainDisplay 移植）：setTaskWindowingMode →
+     * moveRootTaskToDisplay → resizeTask。Task 跨屏搬运不触发 Activity 重建，
+     * 页面状态保留。freeform=false 时迁移后为全屏（present_to_user 场景）。
+     */
+    override fun relocateTask(packageName: String?, targetDisplayId: Int, freeform: Boolean, bounds: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        return try {
+            val getTasks = taskManager.javaClass.methods.firstOrNull { it.name == "getTasks" && it.parameterCount >= 1 }
+                ?: return false
+            val tasks = when (getTasks.parameterCount) {
+                1 -> getTasks.invoke(taskManager, 40)
+                3 -> getTasks.invoke(taskManager, 40, false, false)
+                4 -> getTasks.invoke(taskManager, 40, false, false, Display.INVALID_DISPLAY)
+                else -> return false
+            } as? List<*> ?: return false
+            var taskId = -1
+            for (item in tasks) {
+                val info = item as? android.app.TaskInfo ?: continue
+                val top = info.topActivity?.packageName ?: info.baseActivity?.packageName
+                if (top == packageName || info.baseActivity?.packageName == packageName) {
+                    taskId = TASK_INFO.getField("taskId").getInt(info)
+                    break
+                }
+            }
+            if (taskId <= 0) return false
+            if (freeform) {
+                // HyperOS 15 的 IActivityTaskManager 已收掉 setTaskWindowingMode（2026-11-01
+                // app_process 枚举实证：接口上只有 moveRootTaskToDisplay/resizeTask(int,Rect,int)）。
+                // 找不到该方法时绝不能继续 move——task 会保持 fullscreen 模式被搬到主屏，直接全屏。
+                // 此时返回 false，让上层走销毁式迁移（removeTask + MIUI options，产出标准 MIUI 小窗）。
+                val setMode = taskManager.javaClass.methods.firstOrNull {
+                    it.name == "setTaskWindowingMode" && it.parameterTypes.firstOrNull() == Int::class.javaPrimitiveType
+                } ?: run {
+                    Log.w(TAG, "setTaskWindowingMode unavailable on this ROM, abort relocation of task $taskId")
+                    return false
+                }
+                runCatching {
+                    if (setMode.parameterTypes.size == 3) setMode.invoke(taskManager, taskId, 5, true)
+                    else setMode.invoke(taskManager, taskId, 5, true, false)
+                }.onFailure {
+                    Log.w(TAG, "setTaskWindowingMode($taskId) failed", it)
+                    return false
+                }
+            }
+            val moved = runCatching {
+                taskManager.javaClass.methods.firstOrNull {
+                    it.name == "moveRootTaskToDisplay" && it.parameterTypes.size == 2
+                }?.invoke(taskManager, taskId, targetDisplayId) != null
+            }.onFailure { Log.w(TAG, "moveRootTaskToDisplay($taskId -> $targetDisplayId) failed", it) }.getOrDefault(false)
+            if (!moved) return false
+            if (freeform && !bounds.isNullOrBlank()) {
+                runCatching {
+                    val parts = bounds.split(",").map { it.trim().toInt() }
+                    val rect = android.graphics.Rect(parts[0], parts[1], parts[2], parts[3])
+                    // HyperOS 15 的 resizeTask 是 3 参 (int, Rect, int)；旧 2 参签名已不存在。
+                    // resizeMode=0（RESIZE_MODE_INVALID，仅按 bounds 调整）在 shell 路径最通用。
+                    taskManager.javaClass.methods.firstOrNull {
+                        it.name == "resizeTask" && it.parameterTypes.size == 3 &&
+                            it.parameterTypes[1] == android.graphics.Rect::class.java
+                    }?.invoke(taskManager, taskId, rect, 0)
+                        ?: taskManager.javaClass.methods.firstOrNull {
+                            it.name == "resizeTask" && it.parameterTypes.size == 2 &&
+                                it.parameterTypes[1] == android.graphics.Rect::class.java
+                        }?.invoke(taskManager, taskId, rect)
+                }.onFailure { Log.w(TAG, "resizeTask($taskId) failed", it) }
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "relocateTask($packageName) failed", t)
+            false
+        }
+    }
+
+    /** 虚拟屏后台应用防抢主屏音频焦点：cmd appops TAKE_AUDIO_FOCUS ignore/allow */
+    override fun setPackageAudioFocus(packageName: String?, ignore: Boolean): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        return exec(
+            "cmd", "appops", "set", "--user", "0", packageName,
+            "TAKE_AUDIO_FOCUS", if (ignore) "ignore" else "allow",
+        ) == 0
     }
 
     override fun releaseAll() {
         synchronized(displays) { displays.values.toList().also { displays.clear() } }.forEach { vd ->
             runCatching { vd.release() }
         }
+        mutedAudioPackages.forEach { pkg ->
+            runCatching { exec("cmd", "appops", "set", "--user", "0", pkg, "TAKE_AUDIO_FOCUS", "allow") }
+        }
+        mutedAudioPackages.clear()
     }
 
     override fun destroy() {

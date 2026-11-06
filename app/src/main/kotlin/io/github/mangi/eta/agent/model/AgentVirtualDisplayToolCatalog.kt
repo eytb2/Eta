@@ -91,6 +91,13 @@ internal object AgentVirtualDisplayToolCatalog {
         )
         tools.put(
             AgentToolSchema.function(
+                name = "virtual_display_present_to_user",
+                description = "present_to_user：把驻留在 MIUI 小窗里的任务无损移交回物理主屏全屏前台（页面状态保留，不重启）。用于到达付款确认、扫码、验证码或 FLAG_SECURE 安全页等需要本人操作的临门一脚场景。要求任务当前处于小窗驻留状态。需要 Root。",
+                parameters = parameters(JSONObject()),
+            ),
+        )
+        tools.put(
+            AgentToolSchema.function(
                 name = "virtual_display_release",
                 description = "释放虚拟屏；其上的 App 一并结束。",
                 parameters = parameters(JSONObject()),

@@ -24,7 +24,7 @@ internal class AgentDisplay(
     private val shell: IPhoneShell,
     val width: Int,
     val height: Int,
-    dpi: Int,
+    val dpi: Int,
 ) {
     private val thread = HandlerThread("eta-vdisplay").apply { start() }
     private val handler = Handler(thread.looper)

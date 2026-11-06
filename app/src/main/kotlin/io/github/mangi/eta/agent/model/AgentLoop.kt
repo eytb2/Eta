@@ -39,6 +39,8 @@ internal class AgentLoop(
     private val purpose: ProviderRequestPurpose = ProviderRequestPurpose.CHAT,
     private val roleplayContext: RoleplayRunContext? = null,
     initialSupplementIndex: Int = 0,
+    /** 溢出报错里检测到服务商真实上下文窗口时回调（用于自动回填模型配置）。 */
+    private val onContextWindowDetected: (Int) -> Unit = {},
 ) {
     data class Result(
         val content: String,
@@ -114,40 +116,67 @@ internal class AgentLoop(
             )
             var roundInputTokens: Int? = null
             val reasoningLengthBeforeRound = accumulatedReasoning.length
-            val completedRound = try {
-                modelRetry.complete(
-                    initialRound = round,
-                    request = ProviderRequest(config, requestMessages, roundTools, sessionId, purpose),
-                    provider = provider,
-                    controller = runController,
-                    onEvent = { event ->
-                        if (event is AgentEvent.RoundStarted) roundInputTokens = null
-                        onEvent(event)
-                    },
-                    onProviderEvent = { attemptRound, providerEvent ->
-                        if (!purpose.allowsTools && (providerEvent is ProviderEvent.HostedToolStarted ||
-                                providerEvent is ProviderEvent.SearchSuggestions ||
-                                providerEvent is ProviderEvent.BlockStart && providerEvent.kind == AssistantBlockKind.TOOL_CALL)) {
-                            throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
+            // 上下文溢出兜底：未配置 context window 时预防性压缩不会触发，上下文涨满后
+            // 服务商返回 CONTEXT_OVERFLOW（不可重试）。此时强制压缩一次再重试本轮，
+            // 会话得以继续，而不是直接失败（2026-11-01 体验修复）。
+            // 工具链中间（有 pending 签名响应）无法压缩，保持原失败路径。
+            val completedRound = run overflowLoop@{
+                var overflowRetried = false
+                try {
+                    while (true) {
+                        try {
+                            val response = modelRetry.complete(
+                                initialRound = round,
+                                request = ProviderRequest(config, requestMessages, roundTools, sessionId, purpose),
+                                provider = provider,
+                                controller = runController,
+                                onEvent = { event ->
+                                    if (event is AgentEvent.RoundStarted) roundInputTokens = null
+                                    onEvent(event)
+                                },
+                                onProviderEvent = { attemptRound, providerEvent ->
+                                    if (!purpose.allowsTools && (providerEvent is ProviderEvent.HostedToolStarted ||
+                                            providerEvent is ProviderEvent.SearchSuggestions ||
+                                            providerEvent is ProviderEvent.BlockStart && providerEvent.kind == AssistantBlockKind.TOOL_CALL)) {
+                                        throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
+                                    }
+                                    if (providerEvent is ProviderEvent.Usage) {
+                                        roundInputTokens = providerEvent.contextInputTokens ?: roundInputTokens
+                                    }
+                                    if (providerEvent is ProviderEvent.BlockDelta &&
+                                        providerEvent.kind == AssistantBlockKind.THINKING
+                                    ) {
+                                        accumulatedReasoning.append(providerEvent.delta)
+                                    }
+                                    providerEvent.toAgentEvent(attemptRound)?.let(onEvent)
+                                },
+                                discardAttemptReasoning = { accumulatedReasoning.setLength(reasoningLengthBeforeRound) },
+                            ).also { response ->
+                                rejectContentFilter(response.response)
+                                if (purpose == ProviderRequestPurpose.CHAT) validateChatResponse(response.response)
+                            }
+                            return@overflowLoop response
+                        } catch (failure: AgentModelFailure) {
+                            if (failure.code != "CONTEXT_OVERFLOW" || !purpose.allowsTools || overflowRetried ||
+                                SignedToolContext.hasPendingResponse(messages)
+                            ) throw failure
+                            overflowRetried = true
+                            failure.detectedContextWindow?.let(onContextWindowDetected)
+                            onEvent(
+                                AgentEvent.ContextCompaction(
+                                    operationId, AgentEvent.ContextCompaction.PHASE_STARTED,
+                                    roundInputTokens, reasonCode = "CONTEXT_OVERFLOW",
+                                )
+                            )
+                            context.compact(force = true)
                         }
-                        if (providerEvent is ProviderEvent.Usage) {
-                            roundInputTokens = providerEvent.contextInputTokens ?: roundInputTokens
-                        }
-                        if (providerEvent is ProviderEvent.BlockDelta &&
-                            providerEvent.kind == AssistantBlockKind.THINKING
-                        ) {
-                            accumulatedReasoning.append(providerEvent.delta)
-                        }
-                        providerEvent.toAgentEvent(attemptRound)?.let(onEvent)
-                    },
-                    discardAttemptReasoning = { accumulatedReasoning.setLength(reasoningLengthBeforeRound) },
-                ).also { response ->
-                    rejectContentFilter(response.response)
-                    if (purpose == ProviderRequestPurpose.CHAT) validateChatResponse(response.response)
+                    }
+                    @Suppress("UNREACHABLE_CODE")
+                    error("unreachable")
+                } finally {
+                    // 同一回合的重试仍需原始观察；整个回合结束后才移除截图。
+                    discardPendingToolImageMessage()
                 }
-            } finally {
-                // 同一回合的重试仍需原始观察；整个回合结束后才移除截图。
-                discardPendingToolImageMessage()
             }
             context.observeInputTokens(roundInputTokens)
             round = completedRound.round

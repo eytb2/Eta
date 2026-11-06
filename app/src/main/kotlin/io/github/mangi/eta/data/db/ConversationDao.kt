@@ -29,6 +29,15 @@ internal interface ConversationDao : ChunkedTextDao {
     @Query("UPDATE conversations SET title = :title, updated_at = :updatedAt WHERE id = :conversationId")
     suspend fun updateConversationTitle(conversationId: String, title: String, updatedAt: Long)
 
+    /** 会话信息（长按菜单）：消息数与 token 用量聚合，供"会话信息"展示。 */
+    @Query(
+        "SELECT COUNT(*) AS messageCount, " +
+            "COALESCE(SUM(input_tokens), 0) AS inputTokens, " +
+            "COALESCE(SUM(output_tokens), 0) AS outputTokens " +
+            "FROM conversation_messages WHERE conversation_id = :conversationId"
+    )
+    suspend fun conversationStats(conversationId: String): ConversationStatsRow
+
     @Query(
         "SELECT id, title, thinking_enabled, reasoning_effort, " +
             "applied_runtime_run_ids_json, roleplay_json, revisions_json, created_at, updated_at, model_id " +

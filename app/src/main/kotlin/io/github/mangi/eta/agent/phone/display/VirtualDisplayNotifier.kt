@@ -20,8 +20,11 @@ internal object VirtualDisplayNotifier {
     /** 通知渠道 id；与 agent/terminal 的后台命令渠道（eta_background_commands）相互独立 */
     const val CHANNEL_ID = "virtual_display"
 
-    /** "释放虚拟屏"按钮的广播 action；只发给本应用的 [VirtualDisplayReleaseReceiver] */
+    /** "释放虚拟屏"按钮的广播 action；只发给本应用的 [VirtualDisplayActionReceiver] */
     const val ACTION_RELEASE = "io.github.mangi.eta.agent.phone.display.action.RELEASE"
+
+    /** "迁移到小窗"按钮的广播 action；与 RELEASE 同 receiver */
+    const val ACTION_MIGRATE = "io.github.mangi.eta.agent.phone.display.action.MIGRATE"
 
     /** 固定通知编号；与 AgentExecutionService(1107)、BackgroundCommandNotification(1124)、语音(4203/4204) 错开 */
     private const val NOTIFICATION_ID = 1125
@@ -32,7 +35,7 @@ internal object VirtualDisplayNotifier {
         private set
 
     /** 发布或刷新常驻通知；[startedPackage] 为最近经 startApp 成功启动的包名，未启动过时为 null */
-    fun show(context: Context, controller: VirtualDisplayController, startedPackage: String?) {
+    fun show(context: Context, controller: VirtualDisplayController, startedPackage: String?, migrated: Boolean = false) {
         owner = controller
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         manager.createNotificationChannel(
@@ -46,14 +49,17 @@ internal object VirtualDisplayNotifier {
         val notification = Notification.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(context.getString(R.string.virtual_display_notif_title))
-            .setContentText(appLabel(context, startedPackage))
+            .setContentText(
+                appLabel(context, startedPackage) +
+                    if (migrated) context.getString(R.string.virtual_display_notif_in_small_window) else "",
+            )
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .addAction(
                 Notification.Action.Builder(
                     null,
                     context.getString(R.string.virtual_display_notif_action_takeover),
-                    takeoverPendingIntent(context),
+                    migratePendingIntent(context),
                 ).build(),
             )
             .addAction(
@@ -73,17 +79,17 @@ internal object VirtualDisplayNotifier {
         context.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
     }
 
-    /** "打开接管窗"：直接启动接管小窗 Activity（从通知发起，需要 NEW_TASK） */
-    private fun takeoverPendingIntent(context: Context): PendingIntent = PendingIntent.getActivity(
+    /** "迁移到小窗"：发显式广播给 [VirtualDisplayActionReceiver]（后台执行迁移） */
+    private fun migratePendingIntent(context: Context): PendingIntent = PendingIntent.getBroadcast(
         context, 0,
-        Intent(context, VirtualDisplayActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        Intent(context, VirtualDisplayActionReceiver::class.java).setAction(ACTION_MIGRATE),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
     /** "释放虚拟屏"：发给本应用 receiver 的显式广播 */
     private fun releasePendingIntent(context: Context): PendingIntent = PendingIntent.getBroadcast(
         context, 0,
-        Intent(context, VirtualDisplayReleaseReceiver::class.java).setAction(ACTION_RELEASE),
+        Intent(context, VirtualDisplayActionReceiver::class.java).setAction(ACTION_RELEASE),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
@@ -102,13 +108,31 @@ internal object VirtualDisplayNotifier {
  * 常驻通知"释放虚拟屏"按钮的落点（Manifest 注册，不导出，只收本应用的显式广播）：
  * 撤掉通知并释放发布通知的那个控制器持有的虚拟屏。
  */
-internal class VirtualDisplayReleaseReceiver : BroadcastReceiver() {
+internal class VirtualDisplayActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != VirtualDisplayNotifier.ACTION_RELEASE) return
-        val appContext = context.applicationContext
-        VirtualDisplayNotifier.cancel(appContext)
-        // owner 拿不到时退回接管窗用的单例；未持有虚拟屏的控制器 release 是无操作
-        val controller = VirtualDisplayNotifier.owner ?: PhoneDisplayRegistry.controller(appContext)
-        controller.release()
+        val controller = VirtualDisplayNotifier.owner ?: PhoneDisplayRegistry.controller(context)
+        val action = intent.action ?: return
+        // 迁移含 Binder 调用与任务落定等待（最长约 2.6s），goAsync 转后台线程执行
+        val pending = goAsync()
+        Thread {
+            try {
+                val appContext = context.applicationContext
+                when (action) {
+                    VirtualDisplayNotifier.ACTION_MIGRATE -> {
+                        val err = runCatching { controller.migrateToSmallWindow() }
+                            .getOrElse { "迁移失败：${it.message}" }
+                        if (err != null) {
+                            android.widget.Toast.makeText(appContext, err, android.widget.Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    VirtualDisplayNotifier.ACTION_RELEASE -> {
+                        VirtualDisplayNotifier.cancel(appContext)
+                        controller.release()
+                    }
+                }
+            } finally {
+                pending.finish()
+            }
+        }.start()
     }
 }

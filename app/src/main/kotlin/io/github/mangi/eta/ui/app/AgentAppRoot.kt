@@ -97,7 +97,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
 import top.yukonga.miuix.kmp.layout.DialogDefaults
 import top.yukonga.miuix.kmp.nav.core.NavDisplay
 import top.yukonga.miuix.kmp.nav.core.NavDisplayEffects
@@ -105,6 +110,7 @@ import top.yukonga.miuix.kmp.nav.core.rememberNavBackStack
 import top.yukonga.miuix.kmp.nav.core.rememberNavSystemCornerRadius
 import top.yukonga.miuix.kmp.nav.transition.NavSwipeDirection
 import top.yukonga.miuix.kmp.window.WindowDialog
+import io.github.mangi.eta.ui.model.ConversationStatsUi
 
 /**
  * Agent App 根组件：持有本地导航栈，并把 Screen actions 交给 [AgentAppState]。
@@ -125,6 +131,7 @@ fun AgentAppRoot(
     val context = LocalContext.current
     val resources = LocalResources.current
     val uiScope = rememberCoroutineScope()
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
     val backStack = rememberNavBackStack<AppRoute>(AppRoute.Home)
     LaunchedEffect(openSpeechSettings) {
         if (openSpeechSettings) {
@@ -179,6 +186,7 @@ fun AgentAppRoot(
 
     var conversationPaneOpen by rememberSaveable { mutableStateOf(false) }
     var conversationRenameTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
+    var conversationInfoTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var conversationDeleteTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var conversationExportTarget by remember { mutableStateOf<ConversationSummaryUi?>(null) }
     var messageDeleteTarget by remember { mutableStateOf<MessageMutationTarget?>(null) }
@@ -336,6 +344,36 @@ fun AgentAppRoot(
             },
             onConversationDelete = { conversation ->
                 conversationDeleteTarget = conversation
+            },
+            onConversationPin = { conversation ->
+                agentState.pinConversation(conversation.id, !conversation.isPinned)
+            },
+            onConversationArchive = { conversation ->
+                agentState.archiveConversation(conversation.id, !conversation.isArchived)
+            },
+            onConversationCopy = { conversation ->
+                uiScope.launch {
+                    val markdown = agentState.exportConversationMarkdown(conversation.id)
+                    if (markdown != null) {
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(markdown))
+                        android.widget.Toast.makeText(
+                            context,
+                            context.getString(R.string.conversation_copied),
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                    }
+                }
+            },
+            onConversationCopyId = { conversation ->
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(conversation.id))
+                android.widget.Toast.makeText(
+                    context,
+                    context.getString(R.string.conversation_copied),
+                    android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            },
+            onConversationInfo = { conversation ->
+                conversationInfoTarget = conversation
             },
             onOpenTools = { pushRoute(AppRoute.Tools) },
             onOpenSkills = { pushRoute(AppRoute.Skills) },
@@ -823,6 +861,38 @@ fun AgentAppRoot(
         }
     }
 
+    conversationInfoTarget?.let { conversation ->
+        var stats by remember(conversation.id) { mutableStateOf<ConversationStatsUi?>(null) }
+        LaunchedEffect(conversation.id) {
+            stats = agentState.conversationStats(conversation.id)
+        }
+        WindowDialog(
+            show = true,
+            cornerRadius = DialogDefaults.CornerRadius,
+            title = stringResource(R.string.conversation_info_title),
+            summary = conversation.title.ifBlank { conversation.preview },
+            onDismissRequest = { conversationInfoTarget = null },
+        ) {
+            val timeFormat = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()) }
+            Column {
+                stats?.let { data ->
+                    InfoLine(stringResource(R.string.conversation_info_messages), data.messageCount.toString())
+                    InfoLine(
+                        stringResource(R.string.conversation_info_tokens),
+                        "${data.inputTokens} / ${data.outputTokens}",
+                    )
+                    InfoLine(stringResource(R.string.conversation_info_updated), timeFormat.format(java.util.Date(data.updatedAtMillis)))
+                }
+                MiuixDialogActions(
+                    confirmText = stringResource(R.string.action_close),
+                    onCancel = { conversationInfoTarget = null },
+                    onConfirm = { conversationInfoTarget = null },
+                    modifier = Modifier.padding(top = 16.dp),
+                )
+            }
+        }
+    }
+
     conversationDeleteTarget?.let { conversation ->
         WindowDialog(
             show = true,
@@ -907,3 +977,16 @@ private data class MessageMutationTarget(
     val messageId: String,
     val laterTurnCount: Int,
 )
+
+@Composable
+private fun InfoLine(label: String, value: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+    ) {
+        Text(label, style = MiuixTheme.textStyles.body2, color = MiuixTheme.colorScheme.onSurfaceVariantSummary)
+        Spacer(Modifier.width(12.dp))
+        Text(value, style = MiuixTheme.textStyles.body2)
+    }
+}

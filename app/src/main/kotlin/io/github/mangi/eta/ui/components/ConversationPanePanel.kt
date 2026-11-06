@@ -28,7 +28,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Cloud
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Dashboard
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
@@ -122,6 +126,11 @@ internal fun ConversationPanePanel(
     onConversationRename: (ConversationSummaryUi) -> Unit,
     onConversationExport: (ConversationSummaryUi) -> Unit,
     onConversationDelete: (ConversationSummaryUi) -> Unit,
+    onConversationPin: (ConversationSummaryUi) -> Unit,
+    onConversationArchive: (ConversationSummaryUi) -> Unit,
+    onConversationCopy: (ConversationSummaryUi) -> Unit,
+    onConversationCopyId: (ConversationSummaryUi) -> Unit,
+    onConversationInfo: (ConversationSummaryUi) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenModelProviders: () -> Unit,
     onOpenTools: () -> Unit,
@@ -133,6 +142,7 @@ internal fun ConversationPanePanel(
     // state.conversations 已由 AgentAppState 按标题、预览与消息内容过滤。
     val query = state.searchQuery.trim()
     val groups = remember(state.conversations) { state.conversations.groupForDrawer() }
+    var archivedExpanded by remember { mutableStateOf(false) }
 
     Surface(
         modifier = modifier
@@ -192,6 +202,40 @@ internal fun ConversationPanePanel(
                                 onRename = { onConversationRename(conversation) },
                                 onExport = { onConversationExport(conversation) },
                                 onDelete = { onConversationDelete(conversation) },
+                                onPin = { onConversationPin(conversation) },
+                                onArchive = { onConversationArchive(conversation) },
+                                onCopy = { onConversationCopy(conversation) },
+                                onCopyId = { onConversationCopyId(conversation) },
+                                onInfo = { onConversationInfo(conversation) },
+                            )
+                        }
+                    }
+                }
+                if (state.archivedConversations.isNotEmpty()) {
+                    item(key = "archived-section") {
+                        ArchivedSectionHeader(
+                            count = state.archivedConversations.size,
+                            expanded = archivedExpanded,
+                            onToggle = { archivedExpanded = !archivedExpanded },
+                        )
+                    }
+                    if (archivedExpanded) {
+                        items(
+                            items = state.archivedConversations,
+                            key = { "archived-${it.id}" },
+                        ) { conversation ->
+                            ConversationTextRow(
+                                conversation = conversation,
+                                selected = conversation.id == state.selectedConversationId,
+                                onClick = { onConversationSelected(conversation.id) },
+                                onRename = { onConversationRename(conversation) },
+                                onExport = { onConversationExport(conversation) },
+                                onDelete = { onConversationDelete(conversation) },
+                                onPin = { onConversationPin(conversation) },
+                                onArchive = { onConversationArchive(conversation) },
+                                onCopy = { onConversationCopy(conversation) },
+                                onCopyId = { onConversationCopyId(conversation) },
+                                onInfo = { onConversationInfo(conversation) },
                             )
                         }
                     }
@@ -308,6 +352,11 @@ private fun ConversationTextRow(
     onRename: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
+    onPin: () -> Unit,
+    onArchive: () -> Unit,
+    onCopy: () -> Unit,
+    onCopyId: () -> Unit,
+    onInfo: () -> Unit,
 ) {
     var showActionMenu by remember { mutableStateOf(false) }
     val hapticFeedback = LocalHapticFeedback.current
@@ -339,6 +388,16 @@ private fun ConversationTextRow(
                 ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            if (conversation.isPinned) {
+                Icon(
+                    imageVector = Icons.Rounded.PushPin,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .padding(end = ConversationPanelMetrics.ActiveDotGap)
+                        .size(14.dp),
+                    tint = MiuixTheme.colorScheme.primary,
+                )
+            }
             conversation.characterName?.let { name ->
                 CharacterAvatar(
                     name = name,
@@ -393,85 +452,87 @@ private fun ConversationTextRow(
             alignment = PopupPositionProvider.Align.BottomEnd,
             onDismissRequest = { showActionMenu = false },
         ) {
-            val renameText = stringResource(R.string.action_rename)
-            val exportText = stringResource(R.string.action_export)
-            val deleteText = stringResource(R.string.action_delete)
-            val renameItem = remember(renameText) {
-                DropdownItem(
-                    text = renameText,
-                    icon = { modifier ->
-                        Icon(
-                            imageVector = Icons.Rounded.Edit,
-                            contentDescription = null,
-                            modifier = modifier.size(ConversationPanelMetrics.ActionIconSize),
-                        )
-                    },
-                )
-            }
-            val exportItem = remember(exportText) {
-                DropdownItem(
-                    text = exportText,
-                    icon = { modifier ->
-                        Icon(
-                            imageVector = Icons.Rounded.Download,
-                            contentDescription = null,
-                            modifier = modifier.size(ConversationPanelMetrics.ActionIconSize),
-                        )
-                    },
-                )
-            }
-            val deleteItem = remember(deleteText) {
-                DropdownItem(
-                    text = deleteText,
-                    icon = { modifier ->
-                        Icon(
-                            imageVector = Icons.Rounded.Delete,
-                            contentDescription = null,
-                            modifier = modifier.size(ConversationPanelMetrics.ActionIconSize),
-                            tint = MiuixTheme.colorScheme.error,
-                        )
-                    },
-                )
-            }
+            data class ActionItem(val text: String, val icon: androidx.compose.ui.graphics.vector.ImageVector, val destructive: Boolean = false)
+            val actions = listOf(
+                ActionItem(
+                    stringResource(if (conversation.isPinned) R.string.action_unpin else R.string.action_pin),
+                    Icons.Rounded.PushPin,
+                ),
+                ActionItem(stringResource(R.string.action_rename), Icons.Rounded.Edit),
+                ActionItem(stringResource(R.string.action_copy_conversation), Icons.Rounded.ContentCopy),
+                ActionItem(stringResource(R.string.action_copy_conversation_id), Icons.Rounded.ContentCopy),
+                ActionItem(stringResource(R.string.action_conversation_info), Icons.Rounded.Info),
+                ActionItem(stringResource(R.string.action_archive), Icons.Rounded.Archive),
+                ActionItem(stringResource(R.string.action_delete), Icons.Rounded.Delete, destructive = true),
+            )
             val deleteColors = DropdownDefaults.dropdownColors(
                 contentColor = MiuixTheme.colorScheme.error,
                 selectedContentColor = MiuixTheme.colorScheme.error,
                 selectedIndicatorColor = MiuixTheme.colorScheme.error,
             )
             ListPopupColumn {
-                DropdownImpl(
-                    item = renameItem,
-                    optionSize = 3,
-                    isSelected = false,
-                    index = 0,
-                    onSelectedIndexChange = {
-                        showActionMenu = false
-                        onRename()
-                    },
-                )
-                DropdownImpl(
-                    item = exportItem,
-                    optionSize = 3,
-                    isSelected = false,
-                    index = 1,
-                    onSelectedIndexChange = {
-                        showActionMenu = false
-                        onExport()
-                    },
-                )
-                DropdownImpl(
-                    item = deleteItem,
-                    optionSize = 3,
-                    isSelected = false,
-                    index = 2,
-                    dropdownColors = deleteColors,
-                    onSelectedIndexChange = {
-                        showActionMenu = false
-                        onDelete()
-                    },
-                )
+                actions.forEachIndexed { index, action ->
+                    val item = DropdownItem(
+                        text = action.text,
+                        icon = { modifier ->
+                            Icon(
+                                imageVector = action.icon,
+                                contentDescription = null,
+                                modifier = modifier.size(ConversationPanelMetrics.ActionIconSize),
+                                tint = if (action.destructive) MiuixTheme.colorScheme.error else MiuixTheme.colorScheme.onSurface,
+                            )
+                        },
+                    )
+                    DropdownImpl(
+                        item = item,
+                        optionSize = actions.size,
+                        isSelected = false,
+                        index = index,
+                        dropdownColors = if (action.destructive) deleteColors else DropdownDefaults.dropdownColors(),
+                        onSelectedIndexChange = {
+                            showActionMenu = false
+                            when (index) {
+                                0 -> onPin()
+                                1 -> onRename()
+                                2 -> onCopy()
+                                3 -> onCopyId()
+                                4 -> onInfo()
+                                5 -> onArchive()
+                                else -> onDelete()
+                            }
+                        },
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun ArchivedSectionHeader(count: Int, expanded: Boolean, onToggle: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(ConversationPanelMetrics.RowCornerRadius))
+            .clickable(onClick = onToggle)
+            .padding(
+                horizontal = ConversationPanelMetrics.RowHorizontalPadding,
+                vertical = 8.dp,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = stringResource(R.string.conversation_archived_section, count),
+            style = MiuixTheme.textStyles.footnote1,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            imageVector = Icons.Rounded.Archive,
+            contentDescription = null,
+            modifier = Modifier.size(ConversationPanelMetrics.SectionIconSize),
+            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
     }
 }
 

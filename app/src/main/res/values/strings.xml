@@ -1479,6 +1479,20 @@
   <string name="virtual_display_notif_channel">虚拟屏</string>
   <string name="virtual_display_notif_title">虚拟屏运行中</string>
   <string name="virtual_display_notif_no_app">未启动应用</string>
-  <string name="virtual_display_notif_action_takeover">打开接管窗</string>
+  <string name="virtual_display_notif_action_takeover">迁移到小窗</string>
+  <string name="virtual_display_notif_in_small_window">（驻留小窗）</string>
   <string name="virtual_display_notif_action_release">释放虚拟屏</string>
+  <string name="action_pin">Pin to top</string>
+  <string name="action_unpin">Unpin</string>
+  <string name="action_archive">Archive</string>
+  <string name="action_unarchive">Unarchive</string>
+  <string name="action_copy_conversation">Copy conversation</string>
+  <string name="action_copy_conversation_id">Copy conversation ID</string>
+  <string name="action_conversation_info">Conversation info</string>
+  <string name="conversation_info_title">Conversation info</string>
+  <string name="conversation_info_messages">Messages</string>
+  <string name="conversation_info_tokens">Tokens (in / out)</string>
+  <string name="conversation_info_updated">Updated</string>
+  <string name="conversation_copied">Copied to clipboard</string>
+  <string name="conversation_archived_section">Archived (%1$d)</string>
 </resources>

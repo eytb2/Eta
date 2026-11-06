@@ -39,6 +39,9 @@ import io.github.mangi.eta.data.repository.RuntimeConfigRepository
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * 单次 Runtime run 的阻塞执行器。
@@ -87,7 +90,18 @@ internal class AgentRuntimeRunExecutor(
         // 失败清理需要在 try 外拿到会话 id。
         var memoryConversationId: String? = null
         val result = try {
-            val contextWindow = request.config.knownContextWindow
+            // 窗口以库内最新值为准：模型设置的手动修改与溢出自学习的回填，
+            // 无需重启 App 即对下一次会话生效（2026-11-01 上下文自适应）。
+            // 查询失败回退 Bundle 携带值，行为与旧版一致。
+            val effectiveContextWindow: Int? = runBlocking {
+                runCatching {
+                    EtaDatabase.get(appContext).providerDao()
+                        .providerByModelId(request.config.model)
+                        ?.models?.firstOrNull { it.modelId == request.config.model }
+                        ?.let { it.contextWindowOverride ?: it.contextWindow }
+                }.getOrNull()
+            } ?: request.config.contextWindow?.takeIf { it > 0 }
+            val contextWindow = effectiveContextWindow
             checkpointRecorder = AgentRunCheckpointRecorder.create(appContext, request)
             entrySurfaceGuard = EntrySurfaceGuard.from(
                 handoff = request.handoff,
@@ -136,13 +150,13 @@ internal class AgentRuntimeRunExecutor(
                     ConversationMemoryPins.contextFor(
                         conversationId = conversationId,
                         snapshot = AgentMemoryRepository.snapshot(),
-                        contextWindow = request.config.contextWindow,
+                        contextWindow = effectiveContextWindow,
                     )
                 }.getOrElse { throwable ->
                     AndroidAgentLogger.warnThrottled("agent_memory_context_failed") {
                         "Agent memory context unavailable: type=${throwable.safeLogType()}"
                     }
-                    AgentMemoryContextBuilder.empty(request.config.contextWindow)
+                    AgentMemoryContextBuilder.empty(effectiveContextWindow)
                 }
             } else {
                 AgentMemoryContext.DISABLED
@@ -317,7 +331,7 @@ internal class AgentRuntimeRunExecutor(
                 }
             }
             val completedResponse = AgentModelClient.complete(
-                config = request.config,
+                config = request.config.copy(contextWindow = effectiveContextWindow),
                 sessionId = request.effectiveModelSessionId,
                 operationId = request.runId,
                 initialUserMessageId = uiPayload?.promptMessageId(request.runId) ?: "user-${request.runId}",
@@ -337,6 +351,17 @@ internal class AgentRuntimeRunExecutor(
                     session.updateTranscript(transcript)
                 },
                 capabilitiesProvider = { AgentToolCapabilities.capture(appContext) },
+                onContextWindowDetected = { detected ->
+                    // 服务商报错带出的真实窗口：异步回填 provider_models，
+                    // 让预防性压缩按真实容量对任何新模型自适应（失败静默，不影响会话）。
+                    val cfg = request.config
+                    CoroutineScope(Dispatchers.IO).launch {
+                        runCatching {
+                            EtaDatabase.get(appContext).providerDao()
+                                .updateDetectedContextWindow(cfg.providerId, cfg.model, detected)
+                        }
+                    }
+                },
                 prompt = request.prompt,
                 assistantScreenContext = request.assistantScreenContext,
                 toolExecutor = runToolExecutor,

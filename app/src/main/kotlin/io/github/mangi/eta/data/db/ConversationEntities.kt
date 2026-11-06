@@ -40,6 +40,12 @@ internal data class ConversationMetadata(
 )
 
 /** 会话侧栏只读取定长预览，不读取上下文、角色卡与修订正文。 */
+internal data class ConversationStatsRow(
+    val messageCount: Int,
+    val inputTokens: Long,
+    val outputTokens: Long,
+)
+
 internal data class ConversationIndexRow(
     val id: String,
     val title: String,
