@@ -26,6 +26,8 @@ import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -47,10 +49,14 @@ import com.itos.coui.layout.CouiPageDefaults
 import com.itos.coui.layout.Divider
 import com.itos.coui.layout.Footer
 import com.itos.coui.layout.Group
+import androidx.compose.runtime.collectAsState
+import io.github.mangi.eta.agent.device.RootAccess
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.terminal.AlpineEnvironmentPaths
 import io.github.mangi.eta.agent.terminal.LinuxDistribution
 import io.github.mangi.eta.agent.terminal.LinuxEnvironmentPaths
+import io.github.mangi.eta.agent.terminal.RootBindMounts
+import io.github.mangi.eta.agent.terminal.SharedFolderKind
 import io.github.mangi.eta.agent.terminal.SharedFolderMount
 import io.github.mangi.eta.agent.terminal.SharedFolderMounts
 import io.github.mangi.eta.agent.terminal.ShellProcessSupervisor
@@ -122,7 +128,44 @@ internal fun SharedFoldersScreen(
         }
     }
 
+    // Root bind 挂载：实时状态探测与挂载/卸载（本地功能，随上游 COUI 版回归）
+    var mountStatus by remember { mutableStateOf<Map<String, Boolean>>(emptyMap()) }
+    var rootBusy by remember { mutableStateOf(false) }
+    val rootState by RootAccess.state.collectAsState()
+    val rootGranted = rootState.isGranted
+
+    fun refreshMountStatus(list: List<SharedFolderMount>) {
+        if (!rootGranted || list.none { it.kind == SharedFolderKind.ROOT_BIND }) {
+            mountStatus = emptyMap()
+            return
+        }
+        coroutineScope.launch {
+            mountStatus = withContext(Dispatchers.IO) { RootBindMounts.probe(shellSupervisor, list) }
+        }
+    }
+
+    fun toggleRootMount(mount: SharedFolderMount) {
+        if (rootBusy || !rootGranted) return
+        val mounted = mountStatus[mount.name] == true
+        rootBusy = true
+        coroutineScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (mounted) RootBindMounts.umount(shellSupervisor, mount)
+                else RootBindMounts.mount(shellSupervisor, mount)
+            }
+            rootBusy = false
+            if (!result.ok) {
+                notice = context.getString(
+                    if (mounted) R.string.shared_folders_error_unmount else R.string.shared_folders_error_mount,
+                    result.message,
+                )
+            }
+            refreshMountStatus(mounts)
+        }
+    }
+
     LaunchedEffect(Unit) { refreshSources(mounts) }
+    LaunchedEffect(rootGranted, mounts) { refreshMountStatus(mounts) }
 
     val onAddMountClick: () -> Unit = {
         if (TerminalRuntime.rootAvailable || Environment.isExternalStorageManager()) {
@@ -160,6 +203,8 @@ internal fun SharedFoldersScreen(
                     }
                     mounts.forEach { mount ->
                         val missing = sourceExists[mount.sourcePath] == false
+                        val rootBind = mount.kind == SharedFolderKind.ROOT_BIND
+                        val mounted = mountStatus[mount.name]
                         CouiPreference(
                             title = mount.name,
                             summary = buildString {
@@ -175,10 +220,33 @@ internal fun SharedFoldersScreen(
                                     append(" · ")
                                     append(context.getString(R.string.shared_folders_source_missing))
                                 }
+                                if (rootBind) {
+                                    append("\n")
+                                    append(
+                                        when {
+                                            !rootGranted -> context.getString(R.string.shared_folders_root_required)
+                                            mounted == true -> context.getString(R.string.shared_folders_status_mounted)
+                                            else -> context.getString(R.string.shared_folders_status_not_mounted)
+                                        }
+                                    )
+                                }
                             },
                             summaryColor = if (missing) dialogColors.destructive else Color.Unspecified,
                             showChevron = false,
                             trailing = {
+                                if (rootBind && rootGranted) {
+                                    IconButton(onClick = { toggleRootMount(mount) }) {
+                                        Icon(
+                                            imageVector = if (mounted == true) Icons.Rounded.LinkOff else Icons.Rounded.Link,
+                                            contentDescription = stringResource(
+                                                if (mounted == true) R.string.shared_folders_action_unmount
+                                                else R.string.shared_folders_action_mount,
+                                            ),
+                                            modifier = Modifier.size(20.dp),
+                                            tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                                        )
+                                    }
+                                }
                                 IconButton(onClick = { removeTarget = mount }) {
                                     Icon(
                                         imageVector = Icons.Rounded.DeleteOutline,
@@ -190,6 +258,28 @@ internal fun SharedFoldersScreen(
                             },
                         )
                         Divider()
+                    }
+                    if (rootGranted && mounts.any { it.kind == SharedFolderKind.ROOT_BIND && mountStatus[it.name] == true }) {
+                        Divider()
+                        CouiPreference(
+                            title = stringResource(R.string.shared_folders_unmount_all),
+                            titleColor = dialogColors.destructive,
+                            showChevron = false,
+                            onClick = {
+                                if (rootBusy) return@CouiPreference
+                                rootBusy = true
+                                coroutineScope.launch {
+                                    val result = withContext(Dispatchers.IO) {
+                                        RootBindMounts.unmountAll(shellSupervisor, mounts)
+                                    }
+                                    rootBusy = false
+                                    if (!result.ok) {
+                                        notice = context.getString(R.string.shared_folders_error_unmount, result.message)
+                                    }
+                                    refreshMountStatus(mounts)
+                                }
+                            },
+                        )
                     }
                     CouiPreference(
                         title = stringResource(R.string.shared_folders_add),
@@ -243,6 +333,8 @@ internal fun SharedFoldersScreen(
                         }
                         mounts.forEach { mount ->
                             val missing = sourceExists[mount.sourcePath] == false
+                            val rootBind = mount.kind == SharedFolderKind.ROOT_BIND
+                            val mounted = mountStatus[mount.name]
                             BasicComponent(
                                 title = mount.name,
                                 summary = buildString {
@@ -258,11 +350,34 @@ internal fun SharedFoldersScreen(
                                         append(" · ")
                                         append(context.getString(R.string.shared_folders_source_missing))
                                     }
+                                    if (rootBind) {
+                                        append("\n")
+                                        append(
+                                            when {
+                                                !rootGranted -> context.getString(R.string.shared_folders_root_required)
+                                                mounted == true -> context.getString(R.string.shared_folders_status_mounted)
+                                                else -> context.getString(R.string.shared_folders_status_not_mounted)
+                                            }
+                                        )
+                                    }
                                 },
                                 summaryColor = BasicComponentDefaults.summaryColor(
                                     color = if (missing) MiuixTheme.colorScheme.error else MiuixTheme.colorScheme.onSurfaceVariantSummary,
                                 ),
                                 endActions = {
+                                    if (rootBind && rootGranted) {
+                                        IconButton(onClick = { toggleRootMount(mount) }) {
+                                            Icon(
+                                                imageVector = if (mounted == true) Icons.Rounded.LinkOff else Icons.Rounded.Link,
+                                                contentDescription = stringResource(
+                                                    if (mounted == true) R.string.shared_folders_action_unmount
+                                                    else R.string.shared_folders_action_mount,
+                                                ),
+                                                modifier = Modifier.size(20.dp),
+                                                tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                                            )
+                                        }
+                                    }
                                     IconButton(onClick = { removeTarget = mount }) {
                                         Icon(
                                             imageVector = Icons.Rounded.DeleteOutline,
@@ -270,6 +385,26 @@ internal fun SharedFoldersScreen(
                                             modifier = Modifier.size(20.dp),
                                             tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
                                         )
+                                    }
+                                },
+                            )
+                        }
+                        if (rootGranted && mounts.any { it.kind == SharedFolderKind.ROOT_BIND && mountStatus[it.name] == true }) {
+                            BasicComponent(
+                                title = stringResource(R.string.shared_folders_unmount_all),
+                                titleColor = BasicComponentDefaults.titleColor(color = MiuixTheme.colorScheme.error),
+                                onClick = {
+                                    if (rootBusy) return@BasicComponent
+                                    rootBusy = true
+                                    coroutineScope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            RootBindMounts.unmountAll(shellSupervisor, mounts)
+                                        }
+                                        rootBusy = false
+                                        if (!result.ok) {
+                                            notice = context.getString(R.string.shared_folders_error_unmount, result.message)
+                                        }
+                                        refreshMountStatus(mounts)
                                     }
                                 },
                             )
