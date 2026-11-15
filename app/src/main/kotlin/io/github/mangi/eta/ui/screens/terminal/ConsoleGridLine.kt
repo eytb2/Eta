@@ -93,6 +93,7 @@ internal fun ConsoleGridLine(
     palette: ConsolePalette,
     metrics: ConsoleCellMetrics,
     glyphs: ConsoleGlyphCache,
+    selected: Boolean = false,
 ) {
     val cells = line.cells
     val heightDp = with(LocalDensity.current) { metrics.height.toDp() }
@@ -101,6 +102,14 @@ internal fun ConsoleGridLine(
             .fillMaxWidth()
             .height(heightDp),
     ) {
+        if (selected) {
+            // 选择高亮：整行铺一层主题主色的半透明底。
+            drawRect(
+                palette.composing.copy(alpha = 0.25f),
+                topLeft = Offset(0f, 0f),
+                size = Size(size.width, metrics.height),
+            )
+        }
         drawCells(cells, cursorCol, palette, metrics, glyphs)
         if (composing.isNotEmpty()) drawComposing(composing, composingCol, palette, metrics, glyphs)
     }

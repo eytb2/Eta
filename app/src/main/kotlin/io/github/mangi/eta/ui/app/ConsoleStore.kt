@@ -271,15 +271,17 @@ internal class ConsoleStore(
         scope.launch(inputDispatcher) { controller.write(sessionId, text) }
     }
 
-    /** 功能键按当前会话的光标键模式编码，程序切换 DECCKM 后无需界面感知。 */
-    fun sendKey(key: TerminalKey, modifiers: TerminalModifiers = TerminalModifiers.NONE) {
-        val applicationCursorKeys = activeBuffer { it.applicationCursorKeys } ?: return
-        write(TerminalKeyEncoder.key(key, modifiers, applicationCursorKeys))
-    }
-
     fun sendText(text: String, modifiers: TerminalModifiers = TerminalModifiers.NONE) {
         write(TerminalKeyEncoder.text(text, modifiers))
     }
+
+    /** 功能键按当前会话的光标键模式编码，程序切换 DECCKM 后无需界面感知。 */
+    fun sendKey(key: TerminalKey, modifiers: TerminalModifiers = TerminalModifiers.NONE) {
+        // buffer 未就绪时按标准模式（CSI）编码，避免按键被静默丢弃。
+        val applicationCursorKeys = activeBuffer { it.applicationCursorKeys } ?: false
+        write(TerminalKeyEncoder.key(key, modifiers, applicationCursorKeys))
+    }
+
 
     fun paste(text: String) {
         val bracketed = activeBuffer { it.bracketedPaste } ?: return

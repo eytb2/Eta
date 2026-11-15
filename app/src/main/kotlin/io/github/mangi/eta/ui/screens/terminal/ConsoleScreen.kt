@@ -2,6 +2,7 @@ package io.github.mangi.eta.ui.screens.terminal
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -37,6 +38,7 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
@@ -46,6 +48,8 @@ import io.github.mangi.eta.ui.app.ConsoleStore
 import io.github.mangi.eta.ui.app.ConsoleUiState
 import io.github.mangi.eta.ui.app.UserTerminalStore
 import io.github.mangi.eta.ui.components.EtaMonospace
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.foundation.text.selection.SelectionContainer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.theme.MiuixTheme
@@ -264,7 +268,8 @@ private fun ConsoleGrid(
             derivedStateOf {
                 val layoutInfo = listState.layoutInfo
                 val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: Int.MAX_VALUE
-                lastVisible >= layoutInfo.totalItemsCount - 1
+                // 放宽 1 行容差：最后一行部分可见时也视为在底部，避免跟随失效。
+                lastVisible >= layoutInfo.totalItemsCount - 2
             }
         }
         LaunchedEffect(frame) {
@@ -273,9 +278,63 @@ private fun ConsoleGrid(
             }
         }
         val cursorLineIndex = frame.lines.size - frame.screenRows + frame.cursorRow
+
+        // 长按选择：起点/终点为 frame.lines 的全局行号；拖动经过的行整行选中，松手复制。
+        var selectionAnchor by remember { mutableStateOf<Int?>(null) }
+        var selectionHead by remember { mutableStateOf<Int?>(null) }
+        val selectionClipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+        val selectionContext = LocalContext.current
+
+        fun selectionGlobalLineAt(localY: Float): Int? {
+            val info = listState.layoutInfo.visibleItemsInfo.firstOrNull {
+                localY >= it.offset && localY < it.offset + it.size
+            } ?: return null
+            return info.index
+        }
+
+        fun selectionExtract(): String? {
+            val a = selectionAnchor ?: return null
+            val b = selectionHead ?: return null
+            val from = minOf(a, b).coerceIn(0, frame.lines.lastIndex)
+            val to = maxOf(a, b).coerceIn(0, frame.lines.lastIndex)
+            return (from..to).joinToString("\n") { i ->
+                frame.lines.getOrNull(i)?.cells?.joinToString("") { cell -> cell.text }?.trimEnd().orEmpty()
+            }.takeIf { it.isNotBlank() }
+        }
+
+        Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(frame.lines.size) {
+                    detectDragGesturesAfterLongPress(
+                        onDragStart = { offset ->
+                            selectionAnchor = selectionGlobalLineAt(offset.y)
+                            selectionHead = selectionAnchor
+                        },
+                        onDrag = { change, _ ->
+                            change.consume()
+                            selectionGlobalLineAt(change.position.y)?.let { selectionHead = it }
+                        },
+                        onDragEnd = {
+                            selectionExtract()?.let { text ->
+                                selectionClipboard.setText(AnnotatedString(text))
+                                android.widget.Toast.makeText(
+                                    selectionContext,
+                                    selectionContext.getString(R.string.conversation_copied),
+                                    android.widget.Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                            selectionAnchor = null
+                            selectionHead = null
+                        },
+                        onDragCancel = {
+                            selectionAnchor = null
+                            selectionHead = null
+                        },
+                    )
+                },
             contentPadding = PaddingValues(horizontal = GRID_HORIZONTAL_PADDING),
         ) {
             itemsIndexed(
@@ -283,7 +342,10 @@ private fun ConsoleGrid(
                 key = { _, line -> line.id },
                 contentType = { _, _ -> "console-line" },
             ) { index, line ->
-                val onCursorLine = state.connected && index == cursorLineIndex
+                val onCursorLine = state.connected && cursorLineIndex >= 0 && index == cursorLineIndex
+                val a = selectionAnchor
+                val b = selectionHead
+                val lineSelected = a != null && b != null && index >= minOf(a, b) && index <= maxOf(a, b)
                 ConsoleGridLine(
                     line = line,
                     cursorCol = if (onCursorLine && frame.cursorVisible) frame.cursorCol else null,
@@ -292,8 +354,10 @@ private fun ConsoleGrid(
                     palette = palette,
                     metrics = metrics,
                     glyphs = glyphs,
+                    selected = lineSelected,
                 )
             }
+        }
         }
 
         if (state.exited || state.failMessage != null) {
