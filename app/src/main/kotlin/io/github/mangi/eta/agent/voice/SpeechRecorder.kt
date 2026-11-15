@@ -11,15 +11,23 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.sqrt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.withContext
 
-internal class SpeechRecorder {
-    val frames = Channel<ByteArray>(10)
+internal interface SpeechAudioCapture {
+    val frames: ReceiveChannel<ByteArray>
+    suspend fun record(onReady: () -> Unit, onLevel: (Float) -> Unit)
+    fun finish()
+    fun cancel()
+}
+
+internal class SpeechRecorder : SpeechAudioCapture {
+    override val frames = Channel<ByteArray>(10)
     private val finishing = AtomicBoolean(false)
     @Volatile private var recorder: AudioRecord? = null
 
     @SuppressLint("MissingPermission")
-    suspend fun record(onReady: () -> Unit, onLevel: (Float) -> Unit) = withContext(Dispatchers.IO) {
+    override suspend fun record(onReady: () -> Unit, onLevel: (Float) -> Unit) = withContext(Dispatchers.IO) {
         val minimum = AudioRecord.getMinBufferSize(RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (minimum <= 0) throw SpeechFailure(SpeechErrorCode.AUDIO, "设备不支持语音录音格式")
         val audio = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, RATE,
@@ -61,13 +69,13 @@ internal class SpeechRecorder {
         }
     }
 
-    fun finish() {
+    override fun finish() {
         finishing.set(true)
         // stop 解除阻塞 read；由录音协程在 finally 中唯一释放实例。
         try { recorder?.stop() } catch (_: IllegalStateException) { /* 初始化尚未完成或已经停止。 */ }
     }
 
-    fun cancel() { finish(); frames.cancel() }
+    override fun cancel() { finish(); frames.cancel() }
 
     companion object {
         const val RATE = 16_000

@@ -1,17 +1,16 @@
 package io.github.mangi.eta.agent.voice
 
 import android.app.Application
-import android.os.Bundle
 import android.os.Looper
-import android.speech.SpeechRecognizer
-import io.github.mangi.eta.data.model.SpeechCredentials
 import io.github.mangi.eta.data.model.AsrProvider
+import io.github.mangi.eta.data.model.SpeechCredentials
 import io.github.mangi.eta.data.model.SpeechSettings
-import java.time.Duration
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -21,38 +20,69 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import org.robolectric.shadows.ShadowSpeechRecognizer
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
 class SpeechLifecycleTest {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val results = mutableListOf<String>()
+    private val sessions = mutableListOf<FakeStreamSession>()
     private lateinit var controller: SpeechInputController
 
     @Before fun setup() {
-        ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(true)
-        controller = SpeechInputController(RuntimeEnvironment.getApplication(), scope, onResult = results::add)
+        controller = createController()
     }
-    @After fun close() { controller.cancel(); scope.cancel() }
 
-    private fun start(): ShadowSpeechRecognizer {
-        controller.start(SpeechSettings(), SpeechCredentials())
+    @After fun close() {
+        controller.cancel()
+        scope.cancel()
+    }
+
+    private fun createController(
+        automaticEndpoint: Boolean = false,
+        refiner: SpeechTranscriptRefiner = SpeechTranscriptRefiner(),
+    ): SpeechInputController {
+        var pending: FakeStreamSession? = null
+        return SpeechInputController(
+            context = RuntimeEnvironment.getApplication(),
+            scope = scope,
+            automaticEndpoint = automaticEndpoint,
+            refiner = refiner,
+            createRecorder = { FakeStreamSession().also { pending = it; sessions += it } },
+            recognizeStream = { _, _, _, onReady, onPreview, onEndpoint, endpointSilenceMs ->
+                val session = checkNotNull(pending)
+                pending = null
+                session.attach(onReady, onPreview, onEndpoint, endpointSilenceMs)
+                session.awaitTranscript()
+            },
+            onResult = results::add,
+        )
+    }
+
+    private fun start(
+        target: SpeechInputController = controller,
+        settings: SpeechSettings = SpeechSettings(),
+        holdToTalk: Boolean = false,
+    ): FakeStreamSession {
+        target.start(
+            settings = settings,
+            credentials = SpeechCredentials(qwenAsr = "test-key", doubaoAsr = "test-key"),
+            holdToTalk = holdToTalk,
+        )
         shadowOf(Looper.getMainLooper()).idle()
-        return shadowOf(ShadowSpeechRecognizer.getLatestSpeechRecognizer()).also {
-            it.triggerSupportError(SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT)
-            shadowOf(Looper.getMainLooper()).idle()
-            it.triggerOnReadyForSpeech(Bundle())
-        }
+        return sessions.last()
     }
-    private fun text(value: String) = Bundle().apply { putStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION, arrayListOf(value)) }
 
-    @Test fun dictationWaitsForUserEvenWhenSystemReturnsEarly() {
-        start().triggerOnResults(text("可编辑的草稿"))
+    @Test fun dictationWaitsForUserConfirmationBeforeSubmitting() {
+        val session = start()
+        session.emitPreview("可编辑的草稿")
+        shadowOf(Looper.getMainLooper()).idle()
         assertTrue(results.isEmpty())
         assertEquals("可编辑的草稿", controller.state.value.preview)
         controller.finish()
         controller.finish()
+        session.complete("可编辑的草稿")
+        shadowOf(Looper.getMainLooper()).idle()
         assertEquals(listOf("可编辑的草稿"), results)
         assertFalse(controller.state.value.active)
     }
@@ -61,40 +91,44 @@ class SpeechLifecycleTest {
         val old = start()
         controller.cancel()
         val current = start()
-        old.triggerOnResults(text("旧结果"))
-        current.triggerOnPartialResults(text("新草稿"))
+        old.emitPreview("旧草稿")
+        old.complete("旧结果")
+        current.emitPreview("新草稿")
+        shadowOf(Looper.getMainLooper()).idle()
         assertEquals("新草稿", controller.state.value.preview)
         controller.finish()
-        current.triggerOnResults(text("新结果"))
+        current.complete("新结果")
+        shadowOf(Looper.getMainLooper()).idle()
         assertEquals(listOf("新结果"), results)
     }
 
-    @Test fun closingOwnerReleasesRecognitionAndTimeouts() {
-        val recognizer = start()
+    @Test fun closingOwnerReleasesRecognition() {
+        val session = start()
         controller.cancel()
-        shadowOf(Looper.getMainLooper()).idleFor(Duration.ofSeconds(61))
-        recognizer.triggerOnResults(text("迟到"))
-        assertTrue(recognizer.isDestroyed)
+        session.complete("迟到")
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(session.canceled)
         assertTrue(results.isEmpty())
         assertNull(controller.state.value.error)
     }
 
     @Test fun anotherAudioOwnerInterruptsRecording() {
-        val recognizer = start()
+        val session = start()
         val lease = SpeechAudioLease(RuntimeEnvironment.getApplication()) {}
         try {
             lease.acquire(playback = false)
-            assertTrue(recognizer.isDestroyed)
+            assertTrue(session.canceled)
             assertFalse(controller.state.value.active)
-        } finally { lease.close() }
+        } finally {
+            lease.close()
+        }
     }
 
-    @Test fun ownerCancellationReleasesSystemRecognizer() {
-        val recognizer = start()
+    @Test fun ownerCancellationReleasesRecorder() {
+        val session = start()
         scope.cancel()
         shadowOf(Looper.getMainLooper()).idle()
-        assertTrue(recognizer.isDestroyed)
-        assertFalse(controller.state.value.active)
+        assertTrue(session.canceled)
     }
 
     @Test fun disabledRecognitionDoesNotAcquireAudioOrRequireCloudCredentials() {
@@ -110,38 +144,34 @@ class SpeechLifecycleTest {
                 assertTrue(results.isEmpty())
                 assertFalse(interrupted)
             }
-        } finally { lease.close() }
-    }
-
-    @Test fun disablingAnActiveSessionDiscardsLateRecognitionResults() {
-        val recognizer = start()
-        controller.start(SpeechSettings(recognitionEnabled = false))
-        shadowOf(Looper.getMainLooper()).idle()
-        recognizer.triggerOnResults(text("迟到的旧识别"))
-        assertTrue(recognizer.isDestroyed)
-        assertFalse(controller.state.value.active)
-        assertTrue(results.isEmpty())
-    }
-    private fun overlay(refiner: SpeechTranscriptRefiner = SpeechTranscriptRefiner()) =
-        SpeechInputController(RuntimeEnvironment.getApplication(), scope, automaticEndpoint = true,
-            refiner = refiner, onResult = results::add)
-
-    private fun SpeechInputController.begin(settings: SpeechSettings, holdToTalk: Boolean = false): ShadowSpeechRecognizer {
-        start(settings, SpeechCredentials(), holdToTalk = holdToTalk)
-        shadowOf(Looper.getMainLooper()).idle()
-        return shadowOf(ShadowSpeechRecognizer.getLatestSpeechRecognizer()).also {
-            it.triggerSupportError(SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT)
-            shadowOf(Looper.getMainLooper()).idle()
-            it.triggerOnReadyForSpeech(Bundle())
+        } finally {
+            lease.close()
         }
     }
 
+    @Test fun disablingAnActiveSessionDiscardsLateRecognitionResults() {
+        val session = start()
+        controller.start(SpeechSettings(recognitionEnabled = false))
+        shadowOf(Looper.getMainLooper()).idle()
+        session.complete("迟到的旧识别")
+        shadowOf(Looper.getMainLooper()).idle()
+        assertTrue(session.canceled)
+        assertFalse(controller.state.value.active)
+        assertTrue(results.isEmpty())
+    }
+
     @Test fun overlaySubmitsAfterPauseByDefault() {
-        val overlay = overlay()
+        val overlay = createController(automaticEndpoint = true)
         try {
-            overlay.begin(SpeechSettings()).triggerOnResults(text("打开设置"))
+            val session = start(overlay, SpeechSettings())
+            assertEquals(SpeechSettings.DEFAULT_AUTO_SEND_SILENCE_MS, session.endpointSilenceMs)
+            session.serverEndpoint("打开设置")
+            shadowOf(Looper.getMainLooper()).idle()
+            assertTrue(session.finished)
             assertEquals(listOf("打开设置"), results)
-        } finally { overlay.cancel() }
+        } finally {
+            overlay.cancel()
+        }
     }
 
     @Test fun overlayWaitsWhenAutoSendIsOffOrHoldingToTalk() {
@@ -149,13 +179,23 @@ class SpeechLifecycleTest {
             SpeechSettings(autoSendSilenceMs = 0) to false,
             SpeechSettings() to true,
         ).forEach { (settings, hold) ->
-            val overlay = overlay()
+            val overlay = createController(automaticEndpoint = true)
             try {
-                overlay.begin(settings, holdToTalk = hold).triggerOnResults(text("还没说完"))
+                val session = start(overlay, settings, holdToTalk = hold)
+                assertEquals(0, session.endpointSilenceMs)
+                session.emitPreview("还没说完")
+                shadowOf(Looper.getMainLooper()).idle()
+                assertFalse(session.finished)
                 assertTrue(results.isEmpty())
                 overlay.finish()
+                session.complete("还没说完")
+                shadowOf(Looper.getMainLooper()).idle()
+                assertTrue(session.finished)
                 assertEquals(listOf("还没说完"), results)
-            } finally { overlay.cancel(); results.clear() }
+            } finally {
+                overlay.cancel()
+                results.clear()
+            }
         }
     }
 
@@ -183,9 +223,10 @@ class SpeechLifecycleTest {
             refiner { "用 Python 写脚本" } to "用 Python 写脚本",
             refiner { throw java.io.IOException("offline") } to "用配森写脚本",
         ).forEach { (refiner, expected) ->
-            val overlay = overlay(refiner)
+            val overlay = createController(automaticEndpoint = true, refiner = refiner)
             try {
-                overlay.begin(SpeechSettings(refineTranscript = true)).triggerOnResults(text("用配森写脚本"))
+                val session = start(overlay, SpeechSettings(refineTranscript = true))
+                session.serverEndpoint("用配森写脚本")
                 val deadline = System.nanoTime() + 3_000_000_000
                 while (results.isEmpty() && System.nanoTime() < deadline) {
                     shadowOf(Looper.getMainLooper()).idle()
@@ -193,7 +234,75 @@ class SpeechLifecycleTest {
                 }
                 assertEquals(listOf(expected), results)
                 assertFalse(overlay.state.value.active)
-            } finally { overlay.cancel(); results.clear() }
+            } finally {
+                overlay.cancel()
+                results.clear()
+            }
+        }
+    }
+
+    private class FakeStreamSession : SpeechAudioCapture {
+        override val frames = Channel<ByteArray>(Channel.UNLIMITED)
+        private val stopSignal = CompletableDeferred<Unit>()
+        private val transcript = CompletableDeferred<String>()
+        private var previewCallback: (String) -> Unit = {}
+        private var endpointCallback: () -> Unit = {}
+        var endpointSilenceMs = -1
+            private set
+        var finished = false
+            private set
+        var canceled = false
+            private set
+
+        fun attach(
+            onReady: () -> Unit,
+            onPreview: (String) -> Unit,
+            onEndpoint: () -> Unit,
+            endpointSilenceMs: Int,
+        ) {
+            previewCallback = onPreview
+            endpointCallback = onEndpoint
+            this.endpointSilenceMs = endpointSilenceMs
+            onReady()
+        }
+
+        override suspend fun record(onReady: () -> Unit, onLevel: (Float) -> Unit) {
+            onReady()
+            try {
+                stopSignal.await()
+            } finally {
+                frames.close()
+            }
+        }
+
+        fun emitPreview(text: String) {
+            if (!canceled) previewCallback(text)
+        }
+
+        fun serverEndpoint(text: String) {
+            if (canceled) return
+            previewCallback(text)
+            if (endpointSilenceMs > 0) {
+                endpointCallback()
+                transcript.complete(text)
+            }
+        }
+
+        fun complete(text: String) {
+            if (!canceled) transcript.complete(text)
+        }
+
+        suspend fun awaitTranscript(): String = transcript.await()
+
+        override fun finish() {
+            finished = true
+            stopSignal.complete(Unit)
+        }
+
+        override fun cancel() {
+            canceled = true
+            finish()
+            frames.cancel()
         }
     }
 }

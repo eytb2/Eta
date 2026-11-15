@@ -15,8 +15,23 @@ class AgentAccessibilityHealthProvider : ContentProvider() {
     override fun onCreate(): Boolean = true
 
     override fun call(method: String, arg: String?, extras: Bundle?): Bundle {
+        val callingUid = Binder.getCallingUid()
         if (
-            Binder.getCallingUid() != Process.SYSTEM_UID ||
+            (callingUid == Process.SYSTEM_UID || callingUid == Process.ROOT_UID) &&
+            method == AccessibilityProtectionProtocol.VIRTUAL_DISPLAY_SURFACE_METHOD &&
+            AccessibilityProtectionProtocol.hasSupportedVersion(extras)
+        ) {
+            val token = extras?.getString(AccessibilityProtectionProtocol.EXTRA_SURFACE_TOKEN).orEmpty()
+            val surface = io.github.mangi.eta.agent.virtualdisplay.VirtualDisplaySurfaceRegistry.consume(token)
+            return Bundle().apply {
+                putInt(AccessibilityProtectionProtocol.EXTRA_PROTOCOL_VERSION, AccessibilityProtectionProtocol.VERSION)
+                if (surface != null) {
+                    putParcelable(AccessibilityProtectionProtocol.EXTRA_SURFACE, surface)
+                }
+            }
+        }
+        if (
+            callingUid != Process.SYSTEM_UID ||
             method != AccessibilityProtectionProtocol.HEALTH_METHOD ||
             !AccessibilityProtectionProtocol.hasSupportedVersion(extras)
         ) {

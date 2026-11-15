@@ -2,6 +2,7 @@ package io.github.mangi.eta.agent.model
 
 import io.github.mangi.eta.agent.runtime.AgentEvent
 import io.github.mangi.eta.agent.runtime.AgentRunController
+import io.github.mangi.eta.agent.runtime.AgentTokenUsage
 import io.github.mangi.eta.agent.roleplay.RoleplayRunContext
 import io.github.mangi.eta.agent.subagent.AgentSubagentToolCatalog
 import kotlinx.coroutines.Dispatchers
@@ -58,10 +59,16 @@ internal class AgentLoop(
     private val sensitiveToolCallIds = linkedSetOf<String>()
     private val toolBatchLock = Any()
     private var pendingToolImageMessage: JSONObject? = null
+    private val turnMetrics = TurnMetricsAccumulator()
+    private var precedingTools: JSONArray? = null
     private val context = AgentContextSession(
         config, messages, systemCount, operationId, provider, runController,
         { sensitiveToolCallIds }, onEvent, onContextSnapshot, { transcript.length() },
         roleplay = roleplayContext != null,
+        mainToolsProvider = { precedingTools ?: tools },
+        mainSessionId = sessionId,
+        messageProjector = { source -> roleplayContext?.projectMessages(source) ?: source },
+        enableCacheReuse = true,
     )
     private var supplementIndex = initialSupplementIndex
 
@@ -91,7 +98,6 @@ internal class AgentLoop(
 
     fun run(): Result {
         var round = 1
-        var precedingTools: JSONArray? = null
 
         while (true) {
             runController.throwIfCancelled()
@@ -115,23 +121,33 @@ internal class AgentLoop(
                 roleplayContext?.projectMessages(messages) ?: messages,
             )
             var roundInputTokens: Int? = null
+            var roundUsage: AgentTokenUsage? = null
+            var stepStartedAtMs = monotonicNowMs()
+            var firstTokenAtMs: Long? = null
             val reasoningLengthBeforeRound = accumulatedReasoning.length
-            // 上下文溢出兜底：未配置 context window 时预防性压缩不会触发，上下文涨满后
-            // 服务商返回 CONTEXT_OVERFLOW（不可重试）。此时强制压缩一次再重试本轮，
-            // 会话得以继续，而不是直接失败（2026-11-01 体验修复）。
+// 上下文溢出兜底（本地 2026-11-01，适配上游用量/计时逻辑）：未配置 context window
+            // 时预防性压缩不会触发，上下文涨满后服务商返回 CONTEXT_OVERFLOW（不可重试）。
+            // 此时强制压缩一次再重试本轮，会话得以继续；同时回填检测到的真实窗口。
             // 工具链中间（有 pending 签名响应）无法压缩，保持原失败路径。
             val completedRound = run overflowLoop@{
                 var overflowRetried = false
                 try {
                     while (true) {
                         try {
+                            stepStartedAtMs = monotonicNowMs()
+                            firstTokenAtMs = null
                             val response = modelRetry.complete(
                                 initialRound = round,
                                 request = ProviderRequest(config, requestMessages, roundTools, sessionId, purpose),
                                 provider = provider,
                                 controller = runController,
                                 onEvent = { event ->
-                                    if (event is AgentEvent.RoundStarted) roundInputTokens = null
+                                    if (event is AgentEvent.RoundStarted) {
+                                        roundInputTokens = null
+                                        roundUsage = null
+                                        stepStartedAtMs = monotonicNowMs()
+                                        firstTokenAtMs = null
+                                    }
                                     onEvent(event)
                                 },
                                 onProviderEvent = { attemptRound, providerEvent ->
@@ -140,7 +156,18 @@ internal class AgentLoop(
                                             providerEvent is ProviderEvent.BlockStart && providerEvent.kind == AssistantBlockKind.TOOL_CALL)) {
                                         throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
                                     }
+                                    if (providerEvent is ProviderEvent.RequestStarted) {
+                                        stepStartedAtMs = monotonicNowMs()
+                                        firstTokenAtMs = null
+                                    }
+                                    if (firstTokenAtMs == null &&
+                                        providerEvent is ProviderEvent.BlockDelta &&
+                                        providerEvent.delta.isNotEmpty()
+                                    ) {
+                                        firstTokenAtMs = monotonicNowMs()
+                                    }
                                     if (providerEvent is ProviderEvent.Usage) {
+                                        roundUsage = providerEvent.usage
                                         roundInputTokens = providerEvent.contextInputTokens ?: roundInputTokens
                                     }
                                     if (providerEvent is ProviderEvent.BlockDelta &&
@@ -148,7 +175,9 @@ internal class AgentLoop(
                                     ) {
                                         accumulatedReasoning.append(providerEvent.delta)
                                     }
-                                    providerEvent.toAgentEvent(attemptRound)?.let(onEvent)
+                                    if (providerEvent !is ProviderEvent.Usage) {
+                                        providerEvent.toAgentEvent(attemptRound)?.let(onEvent)
+                                    }
                                 },
                                 discardAttemptReasoning = { accumulatedReasoning.setLength(reasoningLengthBeforeRound) },
                             ).also { response ->
@@ -178,6 +207,10 @@ internal class AgentLoop(
                     discardPendingToolImageMessage()
                 }
             }
+            val completedAtMs = monotonicNowMs()
+            val stepLlmMs = (completedAtMs - stepStartedAtMs).coerceAtLeast(0L)
+            val stepTtftMs = firstTokenAtMs?.let { (it - stepStartedAtMs).coerceAtLeast(0L) }
+            val stepDecodeMs = firstTokenAtMs?.let { (completedAtMs - it).coerceAtLeast(0L) }
             context.observeInputTokens(roundInputTokens)
             round = completedRound.round
             val providerResponse = completedRound.response
@@ -213,6 +246,16 @@ internal class AgentLoop(
                     toolNames = toolCalls.map { it.name },
                 )
             )
+            val accumulatedUsage = turnMetrics.recordStep(
+                stepLlmMs = stepLlmMs,
+                stepTtftMs = stepTtftMs,
+                stepDecodeMs = stepDecodeMs,
+                stepUsage = roundUsage,
+                stepPromptTokens = roundInputTokens,
+            )
+            if (!accumulatedUsage.isEmpty) {
+                onEvent(AgentEvent.UsageReceived(round = round, usage = accumulatedUsage))
+            }
 
             if (toolCalls.isNotEmpty()) {
                 val outcomes = executeToolBatch(round, toolCalls, providerResponse.stopReason)
@@ -289,6 +332,7 @@ internal class AgentLoop(
         val supplement = runController.pollSteeringMessage() ?: return false
         appendMessage(steeringMessage(supplement))
         context.userAppended()
+        turnMetrics.reset()
         return true
     }
 
@@ -296,6 +340,7 @@ internal class AgentLoop(
         val supplement = runController.pollSteeringOrSeal() ?: return false
         appendMessage(steeringMessage(supplement))
         context.userAppended()
+        turnMetrics.reset()
         return true
     }
 
@@ -375,6 +420,7 @@ internal class AgentLoop(
             supervisorScope {
                 calls.map { toolCall ->
                     async {
+                        val toolStartMs = monotonicNowMs()
                         val result = try {
                             toolExecutor.execute(toolCall)
                         } catch (throwable: Exception) {
@@ -396,11 +442,13 @@ internal class AgentLoop(
                                 )
                             }
                         }
+                        val elapsedMs = (monotonicNowMs() - toolStartMs).coerceAtLeast(0L)
                         synchronized(toolBatchLock) {
                             if (result.sensitive || AgentSensitiveToolPolicy.isSensitive(toolCall.name)) {
                                 sensitiveToolCallIds += toolCall.id
                             }
                             if (!runController.isCancelled) {
+                                turnMetrics.recordToolMs(elapsedMs)
                                 emitToolFinished(round, toolCall, result)
                             }
                         }
@@ -437,6 +485,7 @@ internal class AgentLoop(
             )
         )
 
+        val toolStartMs = monotonicNowMs()
         val result = try {
             toolExecutor.execute(roundCall)
         } catch (throwable: Exception) {
@@ -449,6 +498,7 @@ internal class AgentLoop(
                     .toString(),
             )
         }
+        turnMetrics.recordToolMs((monotonicNowMs() - toolStartMs).coerceAtLeast(0L))
         if (result.sensitive || AgentSensitiveToolPolicy.isSensitive(roundCall.name)) {
             sensitiveToolCallIds += roundCall.id
         }
@@ -599,4 +649,83 @@ internal class AgentLoop(
             AssistantBlockKind.TOOL_CALL -> AgentEvent.AssistantBlockKind.TOOL_CALL
         }
 
+    private fun monotonicNowMs(): Long = System.nanoTime() / 1_000_000L
+
+    private class TurnMetricsAccumulator {
+        private var stepCount: Int = 0
+        private var llmMs: Long = 0L
+        private var toolMs: Long = 0L
+        private var ttftMs: Long = 0L
+        private var ttftSteps: Int = 0
+        private var decodeMs: Long = 0L
+        private var decodeTokens: Int = 0
+        private var contextTokens: Int? = null
+        private var inputTokens: Int? = null
+        private var outputTokens: Int? = null
+        private var reasoningTokens: Int? = null
+        private var cachedTokens: Int? = null
+        private var cacheWriteTokens: Int? = null
+
+        fun reset() {
+            stepCount = 0
+            llmMs = 0L
+            toolMs = 0L
+            ttftMs = 0L
+            ttftSteps = 0
+            decodeMs = 0L
+            decodeTokens = 0
+            contextTokens = null
+            inputTokens = null
+            outputTokens = null
+            reasoningTokens = null
+            cachedTokens = null
+            cacheWriteTokens = null
+        }
+
+        fun recordStep(
+            stepLlmMs: Long,
+            stepTtftMs: Long?,
+            stepDecodeMs: Long?,
+            stepUsage: AgentTokenUsage?,
+            stepPromptTokens: Int? = null,
+        ): AgentTokenUsage {
+            stepCount += 1
+            llmMs += stepLlmMs.coerceAtLeast(0L)
+            if (stepTtftMs != null) {
+                ttftMs += stepTtftMs.coerceAtLeast(0L)
+                ttftSteps += 1
+            }
+            val stepOut = stepUsage?.outputTokens
+            if (stepDecodeMs != null && stepOut != null && stepOut > 0) {
+                decodeMs += stepDecodeMs.coerceAtLeast(0L)
+                decodeTokens += stepOut
+            }
+            stepUsage?.contextTokens?.let { contextTokens = it }
+            (stepPromptTokens ?: stepUsage?.inputTokens)?.let { inputTokens = (inputTokens ?: 0) + it }
+            stepUsage?.outputTokens?.let { outputTokens = (outputTokens ?: 0) + it }
+            stepUsage?.reasoningTokens?.let { reasoningTokens = (reasoningTokens ?: 0) + it }
+            stepUsage?.cachedTokens?.let { cachedTokens = (cachedTokens ?: 0) + it }
+            stepUsage?.cacheWriteTokens?.let { cacheWriteTokens = (cacheWriteTokens ?: 0) + it }
+            return AgentTokenUsage(
+                contextTokens = contextTokens,
+                inputTokens = inputTokens,
+                outputTokens = outputTokens,
+                reasoningTokens = reasoningTokens,
+                cachedTokens = cachedTokens,
+                cacheWriteTokens = cacheWriteTokens,
+                requestKind = AgentTokenUsage.REQUEST_KIND_CHAT,
+                stepCount = stepCount.takeIf { it > 0 },
+                llmMs = llmMs.takeIf { stepCount > 0 },
+                toolMs = toolMs.takeIf { it > 0L },
+                ttftMs = ttftMs.takeIf { ttftSteps > 0 },
+                ttftSteps = ttftSteps.takeIf { it > 0 },
+                decodeMs = decodeMs.takeIf { decodeTokens > 0 && it > 0L },
+                decodeTokens = decodeTokens.takeIf { decodeMs > 0L && it > 0 },
+            )
+        }
+
+        fun recordToolMs(elapsedMs: Long) {
+            toolMs += elapsedMs.coerceAtLeast(0L)
+        }
+    }
 }

@@ -32,7 +32,7 @@ internal object AgentToolRequirements {
         }
         register(
             RootRequirement.NONE,
-            "get_current_context", "search_apps", "launch_app", "open_uri", "browser_use", "web_search", "fetch_url",
+            "get_current_context", "search_apps", "launch_app", "present_to_user", "open_uri", "browser_use", "web_search", "fetch_url",
             "observe_screen", "release_gui", "tap", "tap_area", "tap_element", "long_press",
             "long_press_element", "swipe", "scroll", "scroll_element", "type_text", "input_text",
             "replace_text", "clear_text", "set_clipboard", "get_clipboard", "paste_text",
@@ -80,7 +80,7 @@ internal object AgentToolRequirements {
             "wait_for_text", "wait_for_package",
         ).forEach { name -> put(name, getValue(name).copy(accessibility = true)) }
         listOf(
-            "observe_screen", "launch_app", "open_uri", "open_system_panel",
+            "observe_screen", "launch_app", "present_to_user", "open_uri", "open_system_panel",
             "wait", "wait_for_text", "wait_for_package", "set_clipboard", "get_clipboard",
         ).forEach { name -> put(name, getValue(name).copy(gui = true)) }
         listOf(

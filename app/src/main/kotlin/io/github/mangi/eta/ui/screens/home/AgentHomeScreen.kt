@@ -5,6 +5,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.ui.components.AgentChatBody
 import io.github.mangi.eta.ui.components.AgentConversationLoadState
 import io.github.mangi.eta.ui.components.LocalRoleplayChat
@@ -33,6 +35,8 @@ internal fun AgentHomeScreen(
     conversationLoadFailed: Boolean = false,
     historyLoadState: ConversationHistoryLoadState = ConversationHistoryLoadState.Idle,
     isDrawerOpen: Boolean = false,
+    isBranching: Boolean = false,
+    topInset: Dp = 0.dp,
     modifier: Modifier = Modifier,
 ) {
     // key 内保持完整分支，避免提前返回遗留无法转换为 DEX 的编译器标记。
@@ -55,7 +59,9 @@ internal fun AgentHomeScreen(
                 AgentChatBody(
                     messages = state.messages,
                     modelPickerState = modelPickerState,
+                    topInset = topInset,
                     isCompacting = state.isCompacting,
+                    isBranching = isBranching,
                     input = state.input,
                     isStreaming = state.isStreaming,
                     reasoningEffort = state.reasoningEffort,
@@ -64,6 +70,7 @@ internal fun AgentHomeScreen(
                     pendingFileReferences = state.pendingFileReferences,
                     queuedMessages = state.queuedMessages,
                     inputSyncVersion = state.inputSyncVersion,
+                    focusInputOnSync = state.focusInputOnSync,
                     messageEdit = state.messageEdit,
                     onReasoningEffortChange = { onAction(AgentHomeAction.ReasoningEffortChanged(it)) },
                     onCompactContext = { onAction(AgentHomeAction.CompactContext) },
@@ -85,6 +92,9 @@ internal fun AgentHomeScreen(
                     onCancelMessageEdit = { onAction(AgentHomeAction.CancelMessageEdit) },
                     onDeleteMessage = { id -> onAction(AgentHomeAction.DeleteMessage(id)) },
                     onRegenerateMessage = { id -> onAction(AgentHomeAction.RegenerateMessage(id)) },
+                    onBranchMessage = { id ->
+                        conversationKey?.let { onAction(AgentHomeAction.BranchConversation(it, id)) }
+                    },
                     onSelectReplyCandidate = { id, index -> onAction(AgentHomeAction.SelectReplyCandidate(id, index)) },
                     onSuggestionClick = { prompt ->
                         onAction(AgentHomeAction.SubmitMessage(prompt))

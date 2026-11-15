@@ -58,6 +58,9 @@ class AgentPromptBuilderTest {
         assertTrue(terminal.contains("profiles"))
         assertTrue(terminal.contains("terminal_job"))
         assertTrue(terminal.contains("terminal_daemon"))
+        assertTrue(terminal.contains("environment=\"linux\""))
+        assertTrue(terminal.contains("同一个物理文件夹"))
+        assertTrue(terminal.contains("禁止在两个环境之间重复复制"))
         assertFalse(terminal.contains("async=true"))
         assertFalse(terminal.contains("read_async_result"))
     }

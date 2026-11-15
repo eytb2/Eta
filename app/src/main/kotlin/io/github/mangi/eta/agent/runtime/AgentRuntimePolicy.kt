@@ -20,6 +20,7 @@ internal object AgentRuntimePolicy {
         val thinking: Boolean,
         val autoCompaction: Boolean = Prefs.Keys.BOOLEAN_DEFAULTS.getValue(Prefs.Keys.AGENT_AUTO_COMPACTION_ENABLED),
         val subagentTools: Boolean = Prefs.Keys.BOOLEAN_DEFAULTS.getValue(Prefs.Keys.AGENT_SUBAGENT_ENABLED),
+        val virtualDisplay: Boolean = Prefs.Keys.BOOLEAN_DEFAULTS.getValue(Prefs.Keys.AGENT_VIRTUAL_DISPLAY_ENABLED),
     )
 
     fun permissions(preferences: SharedPreferences?): Permissions =
@@ -34,6 +35,7 @@ internal object AgentRuntimePolicy {
             thinking = preferences.allowed(Prefs.Keys.AGENT_THINKING_ENABLED),
             autoCompaction = preferences.allowed(Prefs.Keys.AGENT_AUTO_COMPACTION_ENABLED),
             subagentTools = preferences.allowed(Prefs.Keys.AGENT_SUBAGENT_ENABLED),
+            virtualDisplay = preferences.allowed(Prefs.Keys.AGENT_VIRTUAL_DISPLAY_ENABLED),
         )
 
     fun constrain(

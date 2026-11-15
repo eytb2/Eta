@@ -11,32 +11,17 @@ import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
 
 internal object SystemSpeechRecognizer {
-    internal data class Source(val component: ComponentName?) {
-        val label: String get() = component?.flattenToShortString() ?: "on_device"
-    }
-
-    internal data class Selection(val recognizer: SpeechRecognizer, val source: Source)
-
-    fun create(context: Context): SpeechRecognizer? = select(context)?.recognizer
-
-    fun select(context: Context): Selection? {
+    fun create(context: Context): SpeechRecognizer? {
         val appContext = context.applicationContext
         resolveExternalService(appContext)?.let { component ->
-            return Selection(SpeechRecognizer.createSpeechRecognizer(appContext, component), Source(component))
+            return SpeechRecognizer.createSpeechRecognizer(appContext, component)
         }
         return if (SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext)) {
-            Selection(SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext), Source(null))
+            SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
         } else {
             null
         }
     }
-
-    fun create(context: Context, source: Source): SpeechRecognizer =
-        if (source.component == null) {
-            SpeechRecognizer.createOnDeviceSpeechRecognizer(context.applicationContext)
-        } else {
-            SpeechRecognizer.createSpeechRecognizer(context.applicationContext, source.component)
-        }
 
     internal fun resolveExternalService(context: Context): ComponentName? {
         val configured = Settings.Secure.getString(

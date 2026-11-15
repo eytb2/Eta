@@ -163,6 +163,7 @@ internal object AgentModelClient {
                 virtualDisplayTools = Prefs.isEnabled(Prefs.Keys.AGENT_VIRTUAL_DISPLAY_TOOLS),
                 capabilities = capabilities,
                 localWebSearch = !config.usesHostedWebSearch,
+                disabledTools = Prefs.disabledTools(),
             )
             for (index in 0 until additionalTools.length()) {
                 tools.put(additionalTools.opt(index))
@@ -368,6 +369,7 @@ internal object AgentModelClient {
         val compactedUserTurns: Int = 0,
         val summaryThroughUserTurn: Int = 0,
         val messageId: String = "",
+        val compactionArchiveId: String = "",
     )
 
     fun interface ToolExecutor {

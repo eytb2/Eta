@@ -10,7 +10,7 @@ import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
 
 /**
- * Android 助理角色要求声明识别服务。系统调用委托给外部 ASR；浮窗直接使用同一服务解析入口，避免回调自身。
+ * Android 助理角色要求声明识别服务。Eta 自身只使用在线语音识别；若系统调用该兼容入口，则委托给外部 ASR。
  */
 class EtaRecognitionService : RecognitionService() {
     private val mainHandler = Handler(Looper.getMainLooper())

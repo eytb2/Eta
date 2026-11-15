@@ -16,6 +16,9 @@ import io.github.mangi.eta.data.model.AppearancePaletteStyle
 import io.github.mangi.eta.data.model.AppearanceSettings
 import io.github.mangi.eta.data.model.AppearanceThemeMode
 import io.github.mangi.eta.data.model.AppearanceTopBarBlurStyle
+import io.github.mangi.eta.data.model.AppearanceUiStyle
+import io.github.mangi.eta.data.model.AssistantOverlaySettings
+import io.github.mangi.eta.data.model.ConversationTitleSettings
 import io.github.mangi.eta.data.model.SpeechSettings
 import io.github.mangi.eta.data.model.SubagentSettings
 import io.github.mangi.eta.data.model.WebToolsSettings
@@ -31,7 +34,13 @@ internal object SettingsDataStore {
     private val SPEECH_SETTINGS = stringPreferencesKey("speech_settings_v1")
     private val WEB_TOOLS_SETTINGS = stringPreferencesKey("web_tools_settings_v1")
     private val SUBAGENT_SETTINGS = stringPreferencesKey("subagent_settings_v1")
-    private val speechJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val CONVERSATION_TITLE_SETTINGS = stringPreferencesKey("conversation_title_settings_v1")
+    private val ASSISTANT_OVERLAY_SETTINGS = stringPreferencesKey("assistant_overlay_settings_v1")
+    private val speechJson = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+        coerceInputValues = true
+    }
 
     fun speechSettingsFlow(): Flow<SpeechSettings> {
         ensureInitialized()
@@ -88,6 +97,46 @@ internal object SettingsDataStore {
         dataStore.edit { it[SUBAGENT_SETTINGS] = speechJson.encodeToString(settings) }
     }
 
+    fun conversationTitleSettingsFlow(): Flow<ConversationTitleSettings> {
+        ensureInitialized()
+        return dataStore.data
+            .catch { cause ->
+                if (cause is IOException) emit(emptyPreferences()) else throw cause
+            }
+            .map { prefs ->
+                prefs[CONVERSATION_TITLE_SETTINGS]?.let { raw ->
+                    runCatching { speechJson.decodeFromString<ConversationTitleSettings>(raw) }.getOrNull()
+                } ?: ConversationTitleSettings()
+            }
+    }
+
+    suspend fun conversationTitleSettings(): ConversationTitleSettings = conversationTitleSettingsFlow().first()
+
+    suspend fun setConversationTitleSettings(settings: ConversationTitleSettings) {
+        ensureInitialized()
+        dataStore.edit { it[CONVERSATION_TITLE_SETTINGS] = speechJson.encodeToString(settings) }
+    }
+
+    fun assistantOverlaySettingsFlow(): Flow<AssistantOverlaySettings> {
+        ensureInitialized()
+        return dataStore.data
+            .catch { cause ->
+                if (cause is IOException) emit(emptyPreferences()) else throw cause
+            }
+            .map { prefs ->
+                prefs[ASSISTANT_OVERLAY_SETTINGS]?.let { raw ->
+                    runCatching { speechJson.decodeFromString<AssistantOverlaySettings>(raw) }.getOrNull()
+                } ?: AssistantOverlaySettings()
+            }
+    }
+
+    suspend fun assistantOverlaySettings(): AssistantOverlaySettings = assistantOverlaySettingsFlow().first()
+
+    suspend fun setAssistantOverlaySettings(settings: AssistantOverlaySettings) {
+        ensureInitialized()
+        dataStore.edit { it[ASSISTANT_OVERLAY_SETTINGS] = speechJson.encodeToString(settings) }
+    }
+
     private const val STORE_NAME = "eta_settings"
 
     private val SELECTED_PROVIDER_ID = stringPreferencesKey("selected_provider_id")
@@ -95,6 +144,7 @@ internal object SettingsDataStore {
     private val OFFICIAL_MODEL_CATALOG_REVISION = intPreferencesKey("official_model_catalog_revision")
     private val MEMORY_ENABLED = booleanPreferencesKey("memory_enabled")
     private val LINUX_DISTRIBUTION = stringPreferencesKey("linux_distribution")
+    private val APPEARANCE_UI_STYLE = stringPreferencesKey("appearance_ui_style")
     private val APPEARANCE_THEME_MODE = stringPreferencesKey("appearance_theme_mode")
     private val APPEARANCE_MONET_ENABLED = booleanPreferencesKey("appearance_monet_enabled")
     private val APPEARANCE_PALETTE_STYLE = stringPreferencesKey("appearance_palette_style")
@@ -260,6 +310,23 @@ internal object SettingsDataStore {
         }
     }
 
+    suspend fun selectUiStyle(style: AppearanceUiStyle) {
+        ensureInitialized()
+        dataStore.edit { prefs ->
+            prefs[APPEARANCE_UI_STYLE] = style.persistedValue
+        }
+    }
+
+    suspend fun hasSavedUiStyle(): Boolean {
+        ensureInitialized()
+        return dataStore.data
+            .catch { cause ->
+                if (cause is IOException) emit(emptyPreferences()) else throw cause
+            }
+            .first()
+            .contains(APPEARANCE_UI_STYLE)
+    }
+
     private fun ensureInitialized() {
         check(::dataStore.isInitialized) {
             "SettingsDataStore.init(context) must be called in Application.onCreate()"
@@ -282,6 +349,7 @@ internal object SettingsDataStore {
         selectedModelId = this[SELECTED_MODEL_ID],
         memoryEnabled = this[MEMORY_ENABLED] ?: true,
         appearance = AppearanceSettings(
+            uiStyle = AppearanceUiStyle.fromPersistedValue(this[APPEARANCE_UI_STYLE]),
             themeMode = AppearanceThemeMode.fromPersistedValue(this[APPEARANCE_THEME_MODE]),
             monetEnabled = this[APPEARANCE_MONET_ENABLED] ?: false,
             paletteStyle = AppearancePaletteStyle.fromPersistedValue(this[APPEARANCE_PALETTE_STYLE]),
@@ -298,6 +366,10 @@ internal object SettingsDataStore {
     )
 
     private fun MutablePreferences.putAppearance(settings: AppearanceSettings) {
+        val currentStyle = AppearanceUiStyle.fromPersistedValue(this[APPEARANCE_UI_STYLE])
+        if (contains(APPEARANCE_UI_STYLE) || settings.uiStyle != currentStyle) {
+            this[APPEARANCE_UI_STYLE] = settings.uiStyle.persistedValue
+        }
         this[APPEARANCE_THEME_MODE] = settings.themeMode.persistedValue
         this[APPEARANCE_MONET_ENABLED] = settings.monetEnabled
         this[APPEARANCE_PALETTE_STYLE] = settings.paletteStyle.persistedValue
