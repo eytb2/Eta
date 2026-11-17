@@ -15,6 +15,7 @@ internal fun buildToolsState(context: Context): AgentToolsUiState =
                 tools = listOf(
                     ToolItemUi("observe_screen", context.getString(R.string.tool_ui_watch_the_screen_e70f2a), context.getString(R.string.tool_ui_read_the_current_node_and_attach_the_original_im_df1fec)),
                     ToolItemUi("present_to_user", context.getString(R.string.tool_present_to_user), context.getString(R.string.tool_present_to_user_description)),
+                    ToolItemUi("ask_question", context.getString(R.string.tool_ask_question), context.getString(R.string.tool_ask_question_description)),
                     ToolItemUi("release_gui", context.getString(R.string.tool_release_gui), context.getString(R.string.tool_release_gui_description)),
                     ToolItemUi("tap_element", context.getString(R.string.tool_ui_click_element_7a3d91), context.getString(R.string.tool_ui_click_on_the_most_recently_observed_node_b4cf5a)),
                     ToolItemUi("tap_area", context.getString(R.string.tool_ui_click_area_cbaa08), context.getString(R.string.tool_ui_click_by_coordinate_area_2ad961)),

@@ -164,6 +164,13 @@ internal class AgentFileOperations(private val backend: FileToolBackend) {
         val result = backend.write(stat.path, replacement, append = false, expectedRevision = stat.revision, expectedSha256 = sha256)
         base("edit_file").put("path", result.stat.path).put("revision", result.stat.revision)
             .put("replacements", count).put("bytes_written", replacement.size).put("atomic", result.atomic)
+            // 差异面向用户展示与核对；片段过大或改动过散时省略，不影响编辑结果本身。
+            .also { json ->
+                UnifiedDiff.compute(oldText, newText)?.let { result ->
+                    json.put("diff", result.diff)
+                    if (result.truncated) json.put("diff_truncated", true)
+                }
+            }
     }
 
     fun globFiles(path: String, pattern: String, limit: Int = 80, cursor: String? = null, includeHidden: Boolean = false): String =

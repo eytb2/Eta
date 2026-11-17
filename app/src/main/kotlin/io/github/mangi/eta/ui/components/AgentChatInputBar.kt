@@ -1,5 +1,6 @@
 package io.github.mangi.eta.ui.components
 
+import android.widget.Toast
 import io.github.mangi.eta.ui.voice.SpeechDictationButton
 import io.github.mangi.eta.ui.voice.SpeechInputFeedback
 import io.github.mangi.eta.ui.voice.rememberSpeechInput
@@ -40,6 +41,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -81,6 +83,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -91,6 +94,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -189,6 +193,16 @@ internal fun AgentChatInputBar(
     val canSend = textFieldState.text.isNotBlank() ||
         pendingImages.isNotEmpty() ||
         pendingFileReferences.isNotEmpty()
+    // 快捷指令候选只依赖输入框本地文本，不引入外部状态；不以 `/` 开头时是空列表。
+    // 编辑历史消息时不展示：此时提交不解释指令，弹出的候选选中也无法生效。
+    val inputText = textFieldState.text.toString()
+    val slashCandidates = remember(inputText, isEditingMessage) {
+        if (isEditingMessage) emptyList() else SlashCommands.candidates(inputText)
+    }
+    var showSlashHelp by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    // 规划模式前缀只在提交 /plan 时拼接，作为普通用户消息发给模型。
+    val planPrefix = stringResource(R.string.slash_command_plan_prefix)
     val density = LocalDensity.current
     val statusBarTopPx = WindowInsets.statusBars.getTop(density)
     var inputContainerTopPx by remember { mutableIntStateOf(0) }
@@ -302,6 +316,31 @@ internal fun AgentChatInputBar(
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 // 与输入框内正文同一起点（容器 10dp + 文本 8dp）。
                 modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 8.dp),
+            )
+        }
+
+        // 快捷指令候选贴着输入框上方展开：在流内布局让 Scaffold 量到真实高度，
+        // 消息列表底部留白与键盘避让自动跟上，不需要单独的定位浮窗。
+        AnimatedVisibility(
+            visible = slashCandidates.isNotEmpty(),
+            enter = fadeIn(tween(150)) + expandVertically(
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioNoBouncy,
+                    stiffness = Spring.StiffnessMediumLow,
+                ),
+                expandFrom = Alignment.Bottom,
+            ),
+            exit = fadeOut(tween(110)) + shrinkVertically(tween(140)),
+        ) {
+            SlashCommandList(
+                candidates = slashCandidates,
+                onSelect = { command ->
+                    hapticFeedback.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    textFieldState.setTextAndPlaceCursorAtEnd(command.completion)
+                    focusRequester.requestFocus()
+                    keyboard?.show()
+                },
+                modifier = Modifier.padding(bottom = 8.dp),
             )
         }
 
@@ -472,11 +511,51 @@ internal fun AgentChatInputBar(
                             if (canSend) {
                                 dictation.cancel()
                                 val submittedText = textFieldState.text.toString()
-                                textFieldState.clearText()
-                                if (interrupt) {
-                                    onInterruptAndSubmit(submittedText)
+                                // 带附件时不解释指令：图片与文件本身就是发送意图，
+                                // 此刻把 /xxx 当成指令会让附件凭空消失。
+                                val hasAttachments = pendingImages.isNotEmpty() ||
+                                    pendingFileReferences.isNotEmpty()
+                                // 编辑历史消息时，输入框内容是要替换那条消息的正文，
+                                // 不是新指令；此处解释会把 /clear 变成清空草稿并卡在编辑态。
+                                val effect = if (hasAttachments || isEditingMessage) {
+                                    SlashCommandEffect.PassThrough(submittedText)
                                 } else {
-                                    onSubmit(submittedText)
+                                    SlashCommands.intercept(submittedText)
+                                }
+                                when (effect) {
+                                    is SlashCommandEffect.ClearDraft -> {
+                                        textFieldState.clearText()
+                                        Toast.makeText(context, context.getString(R.string.slash_command_input_cleared), Toast.LENGTH_SHORT).show()
+                                    }
+                                    is SlashCommandEffect.ShowHelp -> {
+                                        showSlashHelp = true
+                                    }
+                                    is SlashCommandEffect.CompactContext -> {
+                                        textFieldState.clearText()
+                                        if (canCompactContext) {
+                                            onCompactContext()
+                                        } else {
+                                            Toast.makeText(context, context.getString(R.string.slash_command_compact_unavailable), Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                    is SlashCommandEffect.CompleteDraft -> {
+                                        textFieldState.setTextAndPlaceCursorAtEnd(effect.text)
+                                        focusRequester.requestFocus()
+                                        keyboard?.show()
+                                    }
+                                    is SlashCommandEffect.SendPlan -> {
+                                        textFieldState.clearText()
+                                        val prompt = planPrefix + effect.task
+                                        if (interrupt) onInterruptAndSubmit(prompt) else onSubmit(prompt)
+                                    }
+                                    is SlashCommandEffect.PassThrough -> {
+                                        textFieldState.clearText()
+                                        if (interrupt) {
+                                            onInterruptAndSubmit(effect.text)
+                                        } else {
+                                            onSubmit(effect.text)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -586,8 +665,102 @@ internal fun AgentChatInputBar(
                 }
             }
         }
+
+        if (showSlashHelp) {
+            ItemDescriptionDialog(
+                title = stringResource(R.string.slash_command_help_title),
+                description = SlashCommandHelpText(),
+                onDismiss = { showSlashHelp = false },
+            )
+        }
     }
 
+}
+
+/**
+ * `/help` 的正文：把每条指令的用法列成可读文本，复用通用的说明弹窗呈现。
+ */
+@Composable
+private fun SlashCommandHelpText(): String {
+    val intro = stringResource(R.string.slash_command_help_intro)
+    // 带参数的指令用完整用法示例，其余只列指令名。
+    val planUsage = stringResource(R.string.slash_command_plan_usage)
+    val entries = SlashCommand.entries.map { command ->
+        val token = if (command.takesArgument) planUsage else "/${command.token}"
+        "$token — ${stringResource(command.labelRes)}：${stringResource(command.hintRes)}"
+    }
+    return buildString {
+        append(intro)
+        append("\n\n")
+        append(entries.joinToString("\n"))
+    }
+}
+
+/**
+ * 快捷指令候选列表：贴着输入框上方展开，点选即把指令补全进输入框。
+ */
+@Composable
+private fun SlashCommandList(
+    candidates: List<SlashCommand>,
+    onSelect: (SlashCommand) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MiuixTheme.colorScheme
+    val isDark = colors.surface.luminance() < 0.5f
+    val isCoui = LocalUiStyle.current == AppearanceUiStyle.COUI
+    val shape = if (isCoui) CouiShape(18.dp, 2.2f) else RoundedCornerShape(16.dp)
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (isCoui) {
+                    Modifier
+                        .clip(shape)
+                        .background(if (isDark) Color(0xFF1C1E22) else Color(0xFFF6F7F9), shape)
+                        .border(0.5.dp, if (isDark) Color(0x20FFFFFF) else Color(0x0E000000), shape)
+                } else {
+                    Modifier
+                        .squircleSurface(color = colors.surfaceContainer, cornerRadius = 16.dp)
+                        .squircleBorder(
+                            width = 0.5.dp,
+                            color = colors.outline.copy(alpha = 0.5f),
+                            cornerRadius = 16.dp,
+                        )
+                },
+            )
+            .padding(vertical = 4.dp),
+    ) {
+        candidates.forEach { command ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable(role = Role.Button) { onSelect(command) }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "/${command.token}",
+                    style = MiuixTheme.textStyles.body2.copy(
+                        fontFamily = EtaMonospace,
+                        fontWeight = FontWeight.Medium,
+                    ),
+                    color = colors.primary,
+                    modifier = Modifier.widthIn(min = 76.dp),
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = stringResource(command.hintRes),
+                    style = MiuixTheme.textStyles.footnote1,
+                    color = colors.onSurfaceVariantSummary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
 }
 
 /**

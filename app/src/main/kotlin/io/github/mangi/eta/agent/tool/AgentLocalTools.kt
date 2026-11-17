@@ -306,7 +306,11 @@ internal class AgentLocalTools(
                     if (toolCall.name == "terminal" && args.optString("action").equals("check_root", ignoreCase = true)) checkRoot()
                     else terminalController.executeTool(toolCall.name, args)
                 })
-                in AgentFileToolCatalog.names -> textResult(terminalTool { terminalController.fileTool(toolCall.name, args) })
+                in AgentFileToolCatalog.names -> fileToolResult(
+                    toolCall.name,
+                    terminalTool { terminalController.fileTool(toolCall.name, args) },
+                )
+                AgentToolDisplayPayload.TOOL_ASK_QUESTION -> askQuestion(args)
                 "memory_get" -> textResult(memoryGet(args))
                 "memory_write" -> textResult(memoryWrite(args))
                 "skills_list" -> textResult(skillsList(args))
@@ -395,6 +399,39 @@ internal class AgentLocalTools(
             return errorResult("TERMINAL_TOOLS_DISABLED", "请先启用终端/文件工具")
         }
         return block()
+    }
+
+    /**
+     * 文件工具结果原样返回给模型；`edit_file` 成功时额外把统一差异挂到展示通道，
+     * 让界面渲染增删对比卡片。差异只走 `command` 展示通道，不重复占用模型上下文，
+     * 解析失败或差异缺失时退回纯文本结果，不影响编辑本身。
+     */
+    private fun fileToolResult(toolName: String, content: String): AgentModelClient.ToolResult {
+        if (toolName != "edit_file") return textResult(content)
+        val payload = runCatching {
+            val json = JSONObject(content)
+            if (!json.optBoolean("ok", false)) return@runCatching null
+            val diff = json.optString("diff").takeIf(String::isNotBlank) ?: return@runCatching null
+            EditDiffPayload(diff = diff, truncated = json.optBoolean("diff_truncated", false))
+        }.getOrNull() ?: return textResult(content)
+        return textResult(content).copy(command = AgentToolDisplayPayload.encode(payload))
+    }
+
+    /**
+     * `ask_question`：校验参数后把结构化提问挂到展示通道，回执要求模型本轮停下等待。
+     * 不阻塞工具线程——用户的选择随后作为普通消息回到会话，Agent 无缝继续。
+     */
+    private fun askQuestion(args: JSONObject): AgentModelClient.ToolResult {
+        val items = AskQuestionTool.parse(args)
+            ?: return textResult(
+                AskQuestionTool.errorResult(
+                    "INVALID_ARGUMENT",
+                    "questions 无效：需要 1–4 个问题，每个问题 2–8 个非空候选项，" +
+                        "question 与每个 option 都不得为空。",
+                ),
+            )
+        val payload = AgentToolDisplayPayload.encode(AskQuestionPayload(questions = items))
+        return textResult(AskQuestionTool.pendingResult(items)).copy(command = payload)
     }
 
     private fun fileVisionTool(block: () -> AgentModelClient.ToolResult): AgentModelClient.ToolResult {

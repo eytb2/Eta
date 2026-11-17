@@ -3,6 +3,7 @@ package io.github.mangi.eta.ui.components
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Article
 import androidx.compose.material.icons.automirrored.rounded.Backspace
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.ManageSearch
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
@@ -109,6 +110,7 @@ internal fun iconForTool(toolId: String): ImageVector = when (toolId) {
     "recent_notifications", "search_notification_history" -> Icons.Rounded.Notifications
     "get_setting", "set_setting" -> Icons.Rounded.Settings
     "inspect_app", "app_state_control" -> Icons.Rounded.AdminPanelSettings
+    "ask_question" -> Icons.AutoMirrored.Rounded.HelpOutline
     "get_logcat" -> Icons.Rounded.Description
     "get_current_location", "search_saved_places" -> Icons.Rounded.LocationOn
     "get_health_summary" -> Icons.Rounded.MonitorHeart

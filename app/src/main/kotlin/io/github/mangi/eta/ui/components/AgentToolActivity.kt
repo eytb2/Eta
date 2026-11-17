@@ -24,6 +24,9 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Difference
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -52,6 +56,8 @@ import io.github.mangi.eta.agent.browser.BrowserSessionSnapshot
 import io.github.mangi.eta.agent.overlay.toolDisplayName
 import io.github.mangi.eta.agent.subagent.AgentSubagentToolCatalog
 import io.github.mangi.eta.agent.subagent.SubagentActivitySnapshot
+import io.github.mangi.eta.agent.tool.AgentToolDisplayPayload
+import io.github.mangi.eta.agent.tool.EditDiffPayload
 import io.github.mangi.eta.ui.model.ToolActivityMessageUi
 import io.github.mangi.eta.ui.model.ToolActivityStatusUi
 import kotlinx.coroutines.Dispatchers
@@ -65,6 +71,53 @@ import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.squircle.squircleBorder
 import top.yukonga.miuix.kmp.squircle.squircleSurface
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+
+/**
+ * 工具消息在消息流中的分派入口。
+ *
+ * `ask_question` 需要用户作答，必须独立成卡渲染在时间线里：若收进可折叠的工作过程，
+ * 运行一结束卡片就被收起，正好在用户需要它的时候消失。
+ */
+@Composable
+internal fun ToolActivityMessage(
+    message: ToolActivityMessageUi,
+    onOpenBrowser: () -> Unit,
+    showBrowserShortcut: Boolean,
+    canAnswerAskQuestion: Boolean,
+    onSubmitAnswer: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    compact: Boolean = false,
+) {
+    // 只有成功执行的 ask_question 才会带上提问载荷；失败或参数被拒时 command 为空，
+    // 解码自然返回 null，条目退回普通工具行展示错误原因。
+    val payload = remember(message.toolName, message.command) {
+        if (message.toolName == AgentToolDisplayPayload.TOOL_ASK_QUESTION) {
+            AgentToolDisplayPayload.decodeAskQuestion(message.command)
+        } else {
+            null
+        }
+    }
+    if (payload != null) {
+        AskQuestionCard(
+            items = payload.questions,
+            // 仍在执行中的提问不开放作答，避免提交与当前这一轮抢跑。
+            // 已结束（含被中断后恢复的 Unknown）都允许作答：用户的选择本来就是一条新消息，
+            // 提问已呈现却不让回答，会把这条任务彻底卡死。
+            // 过期提问由调用方通过 answerableAskQuestionId 排除，不在这里判断。
+            canSubmit = canAnswerAskQuestion && message.status != ToolActivityStatusUi.Running,
+            onSubmitAnswer = onSubmitAnswer,
+            modifier = modifier,
+        )
+        return
+    }
+    ToolActivityInline(
+        message = message,
+        onOpenBrowser = onOpenBrowser,
+        showBrowserShortcut = showBrowserShortcut,
+        modifier = modifier,
+        compact = compact,
+    )
+}
 
 /**
  * 工作过程之外单独出现的工具条目（例如旧会话或语音浮层），沿用时间线节点外观。
@@ -327,17 +380,29 @@ private fun ToolActivityDetail(
     showBrowserShortcut: Boolean,
     onOpenBrowser: () -> Unit,
 ) {
+    // edit_file 复用 command 通道携带差异载荷，此处解码后专门渲染对比卡片；
+    // 解码失败（旧会话或格式变更）时退回原有的命令文本渲染，不留空白。
+    val editDiff = remember(message.toolName, message.command) {
+        if (message.toolName == "edit_file") {
+            AgentToolDisplayPayload.decodeEditDiff(message.command)
+        } else {
+            null
+        }
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 2.dp, bottom = 8.dp, end = 4.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (!message.command.isNullOrBlank()) {
+        if (editDiff != null) {
+            EditDiffBlock(payload = editDiff, context = message.argumentsSummary)
+        } else if (!message.command.isNullOrBlank()) {
             ToolCommandBlock(command = message.command, context = message.argumentsSummary)
         }
         val result = message.resultSummary?.takeIf(String::isNotBlank)
-        if (result != null) {
+        // 差异卡片已经说明了这次改动，再列一遍结果摘要只会重复占位。
+        if (result != null && editDiff == null) {
             SelectionContainer {
                 Text(
                     text = result,
@@ -375,6 +440,200 @@ private fun ToolActivityDetail(
         }
     }
 }
+
+/** 差异行类型：决定底色、字色与是否计入增删统计。 */
+private enum class DiffLineKind { Header, Added, Removed, Context }
+
+private data class DiffLine(val kind: DiffLineKind, val text: String)
+
+/**
+ * 逐行解析差异。生成的差异不含 `---`/`+++` 文件头，因此这两个前缀必须按普通的
+ * 增删行处理——否则内容本身以 `++` 开头的新增行会被误判。
+ */
+private fun parseDiffLines(diff: String): List<DiffLine> = diff.lines().map { line ->
+    val kind = when {
+        line.startsWith("@@") -> DiffLineKind.Header
+        line.startsWith("+") -> DiffLineKind.Added
+        line.startsWith("-") -> DiffLineKind.Removed
+        else -> DiffLineKind.Context
+    }
+    DiffLine(kind, line)
+}
+
+/**
+ * `edit_file` 的增删对比卡片。
+ *
+ * 折叠态只露出前面若干行并给出统计，长改动不会把工具卡片撑满整屏；点开后展示完整差异。
+ * 每行用整宽底色标出增删，等宽字体保证 `-`/`+` 与代码列对齐。
+ */
+@Composable
+private fun EditDiffBlock(
+    payload: EditDiffPayload,
+    context: String,
+    modifier: Modifier = Modifier,
+) {
+    @Suppress("DEPRECATION")
+    val clipboardManager = LocalClipboardManager.current
+    var expanded by rememberSaveable(payload.diff) { mutableStateOf(false) }
+    var copied by remember(payload.diff) { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) {
+            delay(1_400)
+            copied = false
+        }
+    }
+
+    val allLines = remember(payload.diff) { parseDiffLines(payload.diff) }
+    val addedCount = remember(allLines) { allLines.count { it.kind == DiffLineKind.Added } }
+    val removedCount = remember(allLines) { allLines.count { it.kind == DiffLineKind.Removed } }
+    val hiddenCount = (allLines.size - COLLAPSED_DIFF_LINES).coerceAtLeast(0)
+    val visibleLines = if (expanded || hiddenCount == 0) allLines else allLines.take(COLLAPSED_DIFF_LINES)
+
+    val colors = MiuixTheme.colorScheme
+    val headerColor = colors.primary
+    val addedColor = StatusSuccess
+    val removedColor = StatusError
+
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .squircleSurface(
+                color = MiuixTheme.colorScheme.surface,
+                cornerRadius = 10.dp,
+            )
+            .squircleBorder(
+                width = 0.5.dp,
+                color = MiuixTheme.colorScheme.outline.copy(alpha = 0.5f),
+                cornerRadius = 10.dp,
+            ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, end = 2.dp, top = 2.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Difference,
+                contentDescription = null,
+                modifier = Modifier.size(13.dp),
+                tint = colors.onSurfaceVariantSummary.copy(alpha = 0.8f),
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = context.ifBlank { stringResource(R.string.tool_diff_title) },
+                style = MiuixTheme.textStyles.footnote2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            // 增删统计始终可见，折叠时也能一眼看出改动规模。
+            Text(
+                text = stringResource(R.string.tool_diff_stats, addedCount, removedCount),
+                style = MiuixTheme.textStyles.footnote2.copy(fontFamily = EtaMonospace),
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.85f),
+                modifier = Modifier.padding(horizontal = 6.dp),
+            )
+            IconButton(
+                onClick = {
+                    @Suppress("DEPRECATION")
+                    clipboardManager.setText(AnnotatedString(payload.diff))
+                    copied = true
+                },
+                minWidth = 32.dp,
+                minHeight = 32.dp,
+            ) {
+                Icon(
+                    imageVector = if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+                    contentDescription = stringResource(
+                        if (copied) R.string.copy_copied else R.string.tool_diff_copy,
+                    ),
+                    modifier = Modifier.size(14.dp),
+                    tint = if (copied) {
+                        colors.primary
+                    } else {
+                        colors.onSurfaceVariantSummary.copy(alpha = 0.8f)
+                    },
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .height(0.5.dp)
+                .background(MiuixTheme.colorScheme.outline.copy(alpha = 0.45f)),
+        )
+        SelectionContainer {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                visibleLines.forEach { line ->
+                    val (background, foreground) = when (line.kind) {
+                        DiffLineKind.Header -> headerColor.copy(alpha = 0.10f) to headerColor
+                        DiffLineKind.Added -> addedColor.copy(alpha = 0.13f) to addedColor
+                        DiffLineKind.Removed -> removedColor.copy(alpha = 0.13f) to removedColor
+                        DiffLineKind.Context -> Color.Transparent to colors.onSurfaceVariantSummary
+                    }
+                    Text(
+                        text = line.text.ifEmpty { " " },
+                        style = MiuixTheme.textStyles.footnote2.copy(
+                            fontFamily = EtaMonospace,
+                            fontSize = 11.sp,
+                            lineHeight = 16.sp,
+                        ),
+                        color = foreground,
+                        // 整宽底色让增删行成块，软换行保证长行内容不被裁掉。
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(background)
+                            .padding(horizontal = 12.dp),
+                    )
+                }
+            }
+        }
+        if (hiddenCount > 0) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { expanded = !expanded }
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Icon(
+                    imageVector = if (expanded) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = colors.primary,
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = if (expanded) {
+                        stringResource(R.string.tool_diff_collapse)
+                    } else {
+                        stringResource(R.string.tool_diff_expand) + " · $hiddenCount"
+                    },
+                    style = MiuixTheme.textStyles.footnote2,
+                    color = colors.primary,
+                )
+            }
+        }
+        if (payload.truncated) {
+            Text(
+                text = stringResource(R.string.tool_diff_truncated),
+                style = MiuixTheme.textStyles.footnote2,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
+            )
+        } else {
+            Spacer(modifier = Modifier.height(6.dp))
+        }
+    }
+}
+
+/** 折叠态展示的差异行数；超出部分通过展开按钮查看。 */
+private const val COLLAPSED_DIFF_LINES = 12
 
 /**
  * 运行计时只在工具执行中组合，每秒仅使这一小段文字重组。起点按条目身份保存，

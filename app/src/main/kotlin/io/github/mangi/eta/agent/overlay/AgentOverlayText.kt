@@ -89,6 +89,7 @@ internal fun toolDisplayNameResource(name: String): Int? = when (name) {
     "terminal_daemon" -> R.string.tool_terminal_daemon
     "run_command" -> R.string.tool_run_command
     "inspect_app" -> R.string.tool_inspect_app
+    "ask_question" -> R.string.tool_ask_question
     "edit_file" -> R.string.tool_edit_file
     "stat_file" -> R.string.tool_stat_file
     "glob_files" -> R.string.tool_glob_files

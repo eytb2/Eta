@@ -25,6 +25,7 @@ internal class AgentTraceFormatter {
             "glob_files" -> "按路径查找文件"
             "grep_files" -> "搜索文件内容"
             "inspect_app" -> "检查应用"
+            "ask_question" -> summarizeAskQuestionArguments(toolCall.argumentsJson)
             "type_text" -> summarizeTypeText(toolCall.argumentsJson)
             "input_text" -> summarizeTextLength("输入文本", toolCall.argumentsJson, "text")
             "replace_text" -> summarizeTextLength("替换文本", toolCall.argumentsJson, "text")
@@ -185,6 +186,21 @@ internal class AgentTraceFormatter {
             if (query.isNotBlank()) "$label · $query" else label
         }.getOrDefault(label)
 
+    /** 提问标题来自模型自己写给用户看的问题，直接展示首个问题与总数。 */
+    private fun summarizeAskQuestionArguments(argumentsJson: String): String =
+        runCatching {
+            val questions = JSONObject(argumentsJson).optJSONArray("questions") ?: return@runCatching "询问用户"
+            val total = questions.length()
+            val first = questions.optJSONObject(0)?.optString("question")
+                ?.let { sanitizeSummaryValue(it, MAX_QUERY_SUMMARY_CHARS) }
+                ?.takeIf { it.isNotBlank() }
+            when {
+                first == null -> "询问用户"
+                total > 1 -> "询问用户 · $first 等 $total 项"
+                else -> "询问用户 · $first"
+            }
+        }.getOrDefault("询问用户")
+
     private fun summarizePointArguments(label: String, argumentsJson: String): String =
         runCatching {
             val arguments = JSONObject(argumentsJson)
@@ -282,6 +298,10 @@ internal class AgentTraceFormatter {
             "wait_for_text" -> "已出现目标文本"
             "wait_for_package" -> "应用已就绪"
             "inspect_app" -> "已获取应用信息"
+            "ask_question" -> when (json?.optString("status")) {
+                "awaiting_user" -> "等待用户选择"
+                else -> "完成"
+            }
             "get_clipboard" -> "已读取剪贴板"
             "set_clipboard" -> "已复制到剪贴板"
             "search_apps" -> json?.let(::summarizeSearchAppsResult) ?: "完成"

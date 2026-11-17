@@ -85,6 +85,7 @@ import com.itos.coui.text.Text as CouiText
 import com.itos.coui.theme.CouiTheme
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.browser.BrowserSessionSnapshot
+import io.github.mangi.eta.agent.tool.AgentToolDisplayPayload
 import io.github.mangi.eta.data.model.AppearanceUiStyle
 import io.github.mangi.eta.data.model.ReasoningEffort
 import io.github.mangi.eta.data.repository.ConversationBranchBoundary
@@ -439,6 +440,8 @@ private fun AgentChatScaffold(
                 onBranchMessage = onBranchMessage,
                 onSelectReplyCandidate = onSelectReplyCandidate,
                 messageActionsEnabled = !isStreaming && !isCompacting && !isBranching && messageEdit == null,
+                // 复用 onSubmit：它已经带上了回到底部与收起键盘的处理，作答与普通发送一致。
+                onSubmitAnswer = onSubmit,
                 editTargetMessageId = messageEdit?.targetMessageId,
                 currentBrowserMessageId = currentBrowserMessageId,
                 hasEarlierMessages = hasEarlierMessages,
@@ -472,6 +475,8 @@ internal fun AgentConversationMessages(
     onBranchMessage: (String) -> Unit = {},
     onSelectReplyCandidate: (String, Int) -> Unit = { _, _ -> },
     messageActionsEnabled: Boolean = false,
+    /** 决策卡片的提交出口；未提供时卡片只读展示（如语音浮层）。 */
+    onSubmitAnswer: (String) -> Unit = {},
     editTargetMessageId: String? = null,
     currentBrowserMessageId: String? = null,
     hasEarlierMessages: Boolean = false,
@@ -499,6 +504,17 @@ internal fun AgentConversationMessages(
     }
     val branchMessageIds = remember(visibleMessages, isStreaming) {
         ConversationBranchBoundary.eligibleMessageIds(visibleMessages.branchMessageOutline(), running = isStreaming)
+    }
+    // 提问卡片是否仍可作答：只有位于最后一条用户消息之后的那次提问算数。
+    // 已作答的提问后面必然跟着用户消息，据此判定可自然区分“待作答”与“历史回执”，
+    // 恢复会话时也不会让过期卡片重新变成可点。
+    val answerableAskQuestionId = remember(visibleMessages) {
+        val lastUserIndex = visibleMessages.indexOfLast { it is UserMessageUi }
+        val lastAskIndex = visibleMessages.indexOfLast { message ->
+            message is ToolActivityMessageUi &&
+                message.toolName == AgentToolDisplayPayload.TOOL_ASK_QUESTION
+        }
+        if (lastAskIndex > lastUserIndex) visibleMessages[lastAskIndex].id else null
     }
     // 流式消息的渲染会话按 id 提升到列表层持有：item 滚出视口被 LazyColumn 销毁后，
     // 滑回时复用同一解析会话与打字机进度，避免整段内容重新解析并重放显现动画。
@@ -791,6 +807,10 @@ internal fun AgentConversationMessages(
                             showBranchAction = !assistantOverlay && message.id in branchMessageIds,
                             onBranchMessage = onBranchMessage,
                             isEditing = message.id == editTargetMessageId,
+                            // 只有本轮末尾那次提问可以被回答：更早的提问要么已被回答，
+                            // 要么已被后续对话取代，重新提交只会把过期答案塞回会话。
+                            askQuestionAnswerable = message.id == answerableAskQuestionId,
+                            onSubmitAnswer = onSubmitAnswer,
                             onEditMessage = onEditMessage,
                             onDeleteMessage = onDeleteMessage,
                             onRegenerateMessage = onRegenerateMessage,
@@ -994,8 +1014,15 @@ private fun AgentTimelineEntry.contentType(): Any = when (this) {
     is AgentTimelineEntry.Message -> message::class
 }
 
-private fun AgentChatMessageUi.isWorkProcessMessage(): Boolean =
-    this is ThinkingMessageUi || this is ToolActivityMessageUi || this is ToolSummaryMessageUi
+/**
+ * `ask_question` 需要用户作答，不收进可折叠的工作过程：运行一结束工作过程就收起，
+ * 提问卡片会在用户正需要它的时候消失。
+ */
+private fun AgentChatMessageUi.isWorkProcessMessage(): Boolean = when (this) {
+    is ToolActivityMessageUi -> toolName != AgentToolDisplayPayload.TOOL_ASK_QUESTION
+    is ThinkingMessageUi, is ToolSummaryMessageUi -> true
+    else -> false
+}
 
 /**
  * 一轮对话（两条用户消息之间）里最后一条 Agent 正文视为最终结果，其余为中间步骤。

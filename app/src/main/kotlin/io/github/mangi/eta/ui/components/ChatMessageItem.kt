@@ -231,6 +231,8 @@ internal fun ChatMessageItem(
     showBranchAction: Boolean = false,
     messageActionsEnabled: Boolean = true,
     isEditing: Boolean = false,
+    askQuestionAnswerable: Boolean = false,
+    onSubmitAnswer: (String) -> Unit = {},
     onEditMessage: (String) -> Unit = {},
     onDeleteMessage: (String) -> Unit = {},
     onRegenerateMessage: (String) -> Unit = {},
@@ -306,10 +308,12 @@ internal fun ChatMessageItem(
             compact = compact,
         )
         is RunTraceMessageUi -> RunTraceRow(message = message, onClick = onRunTraceClick, modifier = modifier)
-        is ToolActivityMessageUi -> ToolActivityInline(
+        is ToolActivityMessageUi -> ToolActivityMessage(
             message = message,
             onOpenBrowser = onOpenBrowser,
             showBrowserShortcut = showBrowserShortcut,
+            canAnswerAskQuestion = messageActionsEnabled && askQuestionAnswerable,
+            onSubmitAnswer = onSubmitAnswer,
             modifier = modifier,
             compact = compact,
         )
@@ -1178,8 +1182,8 @@ private fun CharacterReplyHeader(character: RoleplayChatUi, isGreeting: Boolean)
 }
 
 /** 思考卡片与运行记录等全宽描边卡片共用的圆角与描边强度，相邻时轮廓一致。 */
-private val ChatCardCorner = 12.dp
-private const val ChatCardOutlineAlpha = 0.5f
+internal val ChatCardCorner = 12.dp
+internal const val ChatCardOutlineAlpha = 0.5f
 
 /** 回答操作按钮的紧凑触控尺寸（28.dp 盒 + 16.dp 图标）；行整体左移 6.dp 对齐正文左边缘。 */
 internal val AnswerActionSize = 28.dp
