@@ -8,6 +8,7 @@
 # Gradle / Kotlin 构建缓存
 /.gradle/
 /.gradle-cache/
+/.m2-cache/
 /.sdk-extra/
 /.kotlin/
 **/build/

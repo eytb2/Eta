@@ -141,6 +141,16 @@ android {
                 "--add-opens=jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED",
                 "--enable-native-access=ALL-UNNAMED",
             )
+            // 让测试 JVM Worker 也能通过宿主机代理下载 Robolectric 所需依赖
+            it.systemProperty("http.proxyHost", "127.0.0.1")
+            it.systemProperty("http.proxyPort", "7897")
+            it.systemProperty("https.proxyHost", "127.0.0.1")
+            it.systemProperty("https.proxyPort", "7897")
+            // sun.jnu.encoding 由启动时的系统 locale 决定，无法用 -D 覆盖；构建容器默认是
+            // POSIX locale，会把进程参数与文件名里的非 ASCII 字符编码成 '?'。这里显式给测试
+            // Worker 一个 UTF-8 locale，保证中文命令与中文文件名的用例不被环境破坏。
+            it.environment("LANG", "C.UTF-8")
+            it.environment("LC_ALL", "C.UTF-8")
         }
     }
 }

@@ -63,7 +63,7 @@ internal class AgentContextSession(
         )
     }
 
-    fun compact(force: Boolean = false, final: Boolean = false) {
+    fun compact(force: Boolean = false, final: Boolean = false, allowEmergencyPrune: Boolean = false) {
         val before = inputTokens
         if (SignedToolContext.hasPendingResponse(messages)) {
             if (force) {
@@ -125,16 +125,17 @@ internal class AgentContextSession(
             )
         } catch (failure: Exception) {
             runController.throwIfCancelled()
-            if (force && !final) {
-                // 紧急截断兜底：如果是在强制压缩链路（如发生 CONTEXT_OVERFLOW），模型摘要请求若依然失败，
-                // 绝不能死守原始上下文抛出异常导致会话永久死锁。退化为滑动窗口裁剪旧历史工具输出。
+            if (allowEmergencyPrune && !final) {
+                // 紧急截断兜底：仅用于 CONTEXT_OVERFLOW 的强制恢复链路。此时模型摘要请求若依然失败，
+                // 绝不能死守原始上下文抛出异常导致会话永久死锁，退化为滑动窗口折叠旧历史。
+                // 手动压缩（compactOnly）不在此列：摘要无效必须如实上报，不能静默销毁历史。
                 val emergencyCandidate = tryEmergencyPrune(before)
                 if (emergencyCandidate != null) {
                     val wasCompacted = compacted
                     compacted = true
                     try {
                         publishSnapshot(emergencyCandidate)
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         compacted = wasCompacted
                         throw failure
                     }

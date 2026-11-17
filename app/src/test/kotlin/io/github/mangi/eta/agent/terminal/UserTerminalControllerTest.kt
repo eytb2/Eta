@@ -117,7 +117,8 @@ class UserTerminalControllerTest {
     fun sessionLimitIsEnforced() {
         val controller = UserTerminalController(NoopLogger)
         try {
-            repeat(6) { index ->
+            // 由生产常量驱动，避免上限调整后测试仍写死旧值而静默失效。
+            repeat(UserTerminalController.MAX_SESSIONS) { index ->
                 val open = controller.openSession(
                     TerminalEnvironment.ANDROID, cwd = temporaryFolder.root.absolutePath, identity = "user",
                 )

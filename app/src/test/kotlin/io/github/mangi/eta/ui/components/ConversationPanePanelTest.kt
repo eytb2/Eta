@@ -129,6 +129,10 @@ class ConversationPanePanelTest {
         var skillsClicks = 0
         var permissionsClicks = 0
         var settingsClicks = 0
+        var archiveClicks = 0
+        var copyClicks = 0
+        var copyIdClicks = 0
+        var infoClicks = 0
 
         try {
             mountWithDeterministicRecomposer(activity, recomposeScope, recomposer) {
@@ -152,6 +156,10 @@ class ConversationPanePanelTest {
                         onConversationTogglePin = {},
                         onConversationRename = {},
                         onConversationExport = {},
+                        onConversationArchive = { archiveClicks++ },
+                        onConversationCopy = { copyClicks++ },
+                        onConversationCopyId = { copyIdClicks++ },
+                        onConversationInfo = { infoClicks++ },
                         onConversationDelete = {},
                         onOpenSettings = { settingsClicks++ },
                         onOpenModelProviders = { modelsClicks++ },
@@ -314,6 +322,10 @@ class ConversationPanePanelTest {
                         onConversationTogglePin = {},
                         onConversationRename = {},
                         onConversationExport = {},
+                        onConversationArchive = {},
+                        onConversationCopy = {},
+                        onConversationCopyId = {},
+                        onConversationInfo = {},
                         onConversationDelete = {},
                         onOpenSettings = {},
                         onOpenModelProviders = {},

@@ -17,13 +17,14 @@ fi
 
 if [ -d "$HOST_SDK" ] && docker image inspect "$IMG" >/dev/null 2>&1; then
   echo "==> Building via Docker ($IMG, sdk=$HOST_SDK)"
-  mkdir -p "$ROOT/.gradle-cache" "$ROOT/.sdk-extra/cmake" "$ROOT/.sdk-extra/platforms"
+  mkdir -p "$ROOT/.gradle-cache" "$ROOT/.m2-cache" "$ROOT/.sdk-extra/cmake" "$ROOT/.sdk-extra/platforms"
 
   docker run --rm -i --network host \
     -v "$ROOT":/workspace \
     -v "$HOST_SDK":/sdkro:ro \
     -v "$ROOT/.sdk-extra":/sdkextra \
     -v "$ROOT/.gradle-cache":/root/.gradle \
+    -v "$ROOT/.m2-cache":/root/.m2 \
     -w /workspace \
     -e GRADLE_USER_HOME=/root/.gradle \
     -e ETA_RELEASE_STORE_FILE=/workspace/keystore/release.jks \

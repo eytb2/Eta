@@ -19,6 +19,7 @@ class PrefsDefaultsTest {
                 Prefs.Keys.AGENT_CUSTOM_MODEL to true,
                 Prefs.Keys.AGENT_REQUIRE_PREFIX to false,
                 Prefs.Keys.AGENT_TERMINAL_TOOLS to true,
+                Prefs.Keys.AGENT_VIRTUAL_DISPLAY_TOOLS to false,
                 Prefs.Keys.AGENT_BROWSER_TOOLS to true,
                 Prefs.Keys.AGENT_DEVICE_DIRECT_TOOLS to true,
                 Prefs.Keys.AGENT_DEVICE_SENSITIVE_READ_TOOLS to true,
@@ -40,6 +41,7 @@ class PrefsDefaultsTest {
         assertEquals(
             setOf(
                 Prefs.Keys.AGENT_TERMINAL_TOOLS,
+                Prefs.Keys.AGENT_VIRTUAL_DISPLAY_TOOLS,
                 Prefs.Keys.AGENT_BROWSER_TOOLS,
                 Prefs.Keys.AGENT_DEVICE_DIRECT_TOOLS,
                 Prefs.Keys.AGENT_DEVICE_SENSITIVE_READ_TOOLS,

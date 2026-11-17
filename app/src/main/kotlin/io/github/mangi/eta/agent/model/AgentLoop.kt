@@ -131,6 +131,9 @@ internal class AgentLoop(
             // 工具链中间（有 pending 签名响应）无法压缩，保持原失败路径。
             val completedRound = run overflowLoop@{
                 var overflowRetried = false
+                // 本轮是否已触发服务端托管工具（如 web_search）。托管工具由供应商计费且可能带副作用，
+                // AgentModelRetry 已因此拒绝重放该轮；这里的溢出兜底也必须遵守同一约束。
+                var roundHostedToolStarted = false
                 try {
                     while (true) {
                         try {
@@ -155,6 +158,9 @@ internal class AgentLoop(
                                             providerEvent is ProviderEvent.SearchSuggestions ||
                                             providerEvent is ProviderEvent.BlockStart && providerEvent.kind == AssistantBlockKind.TOOL_CALL)) {
                                         throw AgentModelFailure("REPLY_REWRITE_TOOL_CALL", false, "改写回复时模型请求了工具，已停止；原回复未改变。")
+                                    }
+                                    if (providerEvent is ProviderEvent.HostedToolStarted) {
+                                        roundHostedToolStarted = true
                                     }
                                     if (providerEvent is ProviderEvent.RequestStarted) {
                                         stepStartedAtMs = monotonicNowMs()
@@ -187,7 +193,7 @@ internal class AgentLoop(
                             return@overflowLoop response
                         } catch (failure: AgentModelFailure) {
                             if (failure.code != "CONTEXT_OVERFLOW" || !purpose.allowsTools || overflowRetried ||
-                                SignedToolContext.hasPendingResponse(messages)
+                                roundHostedToolStarted || SignedToolContext.hasPendingResponse(messages)
                             ) throw failure
                             overflowRetried = true
                             failure.detectedContextWindow?.let(onContextWindowDetected)
@@ -197,7 +203,7 @@ internal class AgentLoop(
                                     roundInputTokens, reasonCode = "CONTEXT_OVERFLOW",
                                 )
                             )
-                            context.compact(force = true)
+                            context.compact(force = true, allowEmergencyPrune = true)
                         }
                     }
                     @Suppress("UNREACHABLE_CODE")

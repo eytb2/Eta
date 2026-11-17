@@ -19,16 +19,17 @@ class TerminalPrivateStorageTest {
         val marker = File(oldRootfs, LinuxEnvironmentPaths.READY_MARKER).apply { writeText("existing-root-environment") }
         assertTrue(legacy.setWritable(false, false))
         try {
-            assertFalse(legacy.canWrite())
             val workspace = TerminalPrivateStorage.workspace(files)
             val environment = TerminalPrivateStorage.prootEnvironment(files, LinuxDistribution.DEBIAN)
+            // 旧版 terminal 父目录只作为 Root 遗留数据存在，普通模式必须落到独立的 terminal-user。
+            assertEquals(File(files, "terminal-user/workspace"), workspace)
+            assertEquals(File(files, "terminal-user/proot/debian"), environment)
 
             assertTrue(workspace.mkdirs())
             assertTrue(environment.mkdirs())
             File(workspace, "ordinary.txt").writeText("app-data")
             assertEquals("app-data", File(workspace, "ordinary.txt").readText())
             assertEquals("existing-root-environment", marker.readText())
-            assertFalse(legacy.canWrite())
             assertFalse(File(legacy, "proot").exists())
             assertFalse(File(legacy, "workspace").exists())
         } finally {

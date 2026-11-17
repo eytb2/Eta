@@ -248,11 +248,11 @@ class AgentContextCompactionTest {
     }
 
     @Test
-    fun explicitOverflowFailsWithoutCompactionOrReplay() {
+    fun explicitOverflowTriggersCompactionAndReplaysToCompletion() {
         var normalRequests = 0
         var summaryRequests = 0
-        val failure = assertThrows(AgentModelExecutionException::class.java) {
-            AgentModelClient.complete(config, "继续", AgentModelClient.ToolExecutor { error("不应执行工具") },
+        val result = AgentModelClient.complete(
+            config, "继续", AgentModelClient.ToolExecutor { error("不应执行工具") },
             history = history(), provider = provider { request, emit ->
                 if (request.purpose == ProviderRequestPurpose.COMPACTION) {
                     summaryRequests++
@@ -261,12 +261,35 @@ class AgentContextCompactionTest {
                     emit(ProviderEvent.BlockDelta(AssistantBlockKind.THINKING, 0, "失败思考"))
                     throw AgentModelFailure("CONTEXT_OVERFLOW", false, "fixture")
                 } else response("完成")
-            })
+            },
+        )
+        assertEquals("完成", result.content)
+        assertEquals(2, normalRequests)
+        assertEquals(1, summaryRequests)
+    }
+
+    @Test
+    fun repeatedOverflowFailsAfterSingleCompactionAttempt() {
+        var normalRequests = 0
+        var summaryRequests = 0
+        val failure = assertThrows(AgentModelExecutionException::class.java) {
+            AgentModelClient.complete(
+                config, "继续", AgentModelClient.ToolExecutor { error("不应执行工具") },
+                history = history(), provider = provider { request, emit ->
+                    if (request.purpose == ProviderRequestPurpose.COMPACTION) {
+                        summaryRequests++
+                        response("之前的任务已完成。")
+                    } else {
+                        normalRequests++
+                        emit(ProviderEvent.BlockDelta(AssistantBlockKind.THINKING, 0, "失败思考"))
+                        throw AgentModelFailure("CONTEXT_OVERFLOW", false, "fixture")
+                    }
+                },
+            )
         }
         assertEquals("CONTEXT_OVERFLOW", (failure.cause as AgentModelFailure).code)
-        assertEquals(1, normalRequests)
-        assertEquals(0, summaryRequests)
-        assertTrue(failure.transcript.isEmpty())
+        assertEquals(2, normalRequests)
+        assertEquals(1, summaryRequests)
     }
 
     @Test

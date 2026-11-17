@@ -36,10 +36,19 @@ class AgentContextRecoveryTest {
 
     @Test
     fun automaticCompactionUsesOnlyActualInputUsageAndConfiguredWindow() {
-        for (input in listOf(null, 300_000, 764_999, 765_000)) {
+        // 触发上限取 min(窗口 × 0.85, 120_000)：超大窗口模型不再等到 85% 才压缩
+        // （900k 窗口按纯比例要烧到 765k），小窗口仍由比例决定。两种 regime 都要覆盖。
+        for ((window, input, expectCompaction) in listOf(
+            Triple(900_000, null, false),
+            Triple(900_000, 119_999, false),
+            Triple(900_000, 120_000, true),
+            Triple(900_000, 300_000, true),
+            Triple(100_000, 84_999, false),
+            Triple(100_000, 85_000, true),
+        )) {
             var summaries = 0
             val events = mutableListOf<AgentEvent>()
-            val result = AgentModelClient.complete(config, "继续",
+            val result = AgentModelClient.complete(config.copy(contextWindow = window), "继续",
                 AgentModelClient.ToolExecutor { error("不应执行工具") },
                 history = history(), onEvent = events::add, provider = provider { request, emit ->
                     if (request.purpose == ProviderRequestPurpose.COMPACTION) {
@@ -51,11 +60,11 @@ class AgentContextRecoveryTest {
                         response("完成")
                     }
                 })
-            assertEquals(if (input == 765_000) 1 else 0, summaries)
+            assertEquals("window=$window input=$input", if (expectCompaction) 1 else 0, summaries)
             assertEquals("完成", result.content)
             val completed = events.filterIsInstance<AgentEvent.ContextCompaction>().lastOrNull()
-            if (input == 765_000) {
-                assertEquals(765_000, completed!!.tokensBefore)
+            if (expectCompaction) {
+                assertEquals(input, completed!!.tokensBefore)
                 assertNull(completed.tokensAfter)
             } else assertNull(completed)
         }

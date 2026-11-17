@@ -24,7 +24,7 @@ internal class UserTerminalController(
     private val onSessionExit: (String) -> Unit = {},
 ) : AutoCloseable {
 
-    private companion object {
+    internal companion object {
         const val DEFAULT_CWD = "/data/local/tmp/eta"
         const val LINUX_DEFAULT_CWD = "/workspace"
         const val MAX_SESSIONS = 12
