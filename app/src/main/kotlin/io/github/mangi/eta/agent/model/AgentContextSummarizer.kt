@@ -136,6 +136,10 @@ internal class AgentContextSummarizer(
 
     private fun shouldFallbackToIsolated(failure: AgentModelFailure): Boolean =
         failure.code == TOOL_CALL_ATTEMPT_CODE ||
+            failure.code == "CONTEXT_OVERFLOW" ||
+            failure.code == "HTTP_413" ||
+            failure.code == "STREAM_TIMEOUT" ||
+            failure.code == "TIMEOUT" ||
             (failure.code == "HTTP_400" && !failure.retryable)
 
     private fun buildInstructions(): String =
@@ -153,12 +157,26 @@ internal class AgentContextSummarizer(
     private fun buildIsolatedMessages(
         history: List<AgentModelClient.ConversationMessage>,
         instructions: String,
-    ): JSONArray =
-        JSONArray().put(JSONObject().put("role", "system").put("content", instructions))
+    ): JSONArray {
+        // 如果待整理的历史字符量依然过大，优先保留首尾轮次，确保摘要请求本身不超出模型上下文
+        val safeHistory = if (history.sumOf { it.content.length } > MAX_ISOLATED_HISTORY_CHARS) {
+            val head = history.take(40)
+            val tail = history.takeLast(60)
+            head + listOf(
+                AgentModelClient.ConversationMessage(
+                    role = "assistant",
+                    content = "[...中间较早步骤已省略...]",
+                ),
+            ) + tail
+        } else {
+            history
+        }
+        return JSONArray().put(JSONObject().put("role", "system").put("content", instructions))
             .put(AgentConversationCodec.userTextMessage(buildString {
                 append("待整理的历史：\n")
-                history.forEach { append(AgentConversationCodec.toJsonObject(it)).append('\n') }
+                safeHistory.forEach { append(AgentConversationCodec.toJsonObject(it)).append('\n') }
             }))
+    }
 
     private fun invalidSummary() = AgentModelFailure(
         "CONTEXT_SUMMARY_INVALID", false, "模型未返回完整且有界的摘要，原始上下文已保留。",
@@ -170,6 +188,7 @@ internal class AgentContextSummarizer(
 
     private companion object {
         const val MAX_SUMMARY_CHARS = 12_000
+        const val MAX_ISOLATED_HISTORY_CHARS = 200_000
         const val TOOL_CALL_ATTEMPT_CODE = "CONTEXT_SUMMARY_TOOL_CALL"
     }
 }

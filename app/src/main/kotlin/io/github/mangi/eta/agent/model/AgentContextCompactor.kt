@@ -53,32 +53,53 @@ internal class AgentContextCompactor(
         if (durable.isEmpty()) throw failure("CONTEXT_NOT_COMPACTABLE", "没有可压缩的历史内容。")
         val safe = durable.map { message ->
             val content = AgentConversationCodec.toJsonObject(message).opt("content")
-            val text = if (content is JSONArray) buildString {
+            val rawText = if (content is JSONArray) buildString {
                 for (index in 0 until content.length()) {
                     val part = content.optJSONObject(index) ?: continue
                     if (part.optString("type") in setOf("text", "input_text")) append(part.optString("text"))
                     else append("[图片观察已省略]")
                 }
             } else message.content
+            // 剪裁过长的工具执行原始结果与超长助手回复，防止输入给 LLM 的摘要 Prompt 自身超限溢出
+            val text = if (message.role == "tool" && rawText.length > MAX_TOOL_CHARS_FOR_SUMMARY) {
+                rawText.take(MAX_TOOL_CHARS_FOR_SUMMARY / 2) +
+                    "\n...[工具原始输出已截断，共 ${rawText.length} 字符]...\n" +
+                    rawText.takeLast(MAX_TOOL_CHARS_FOR_SUMMARY / 2)
+            } else if (message.role == "assistant" && rawText.length > MAX_ASSISTANT_CHARS_FOR_SUMMARY) {
+                rawText.take(MAX_ASSISTANT_CHARS_FOR_SUMMARY / 2) +
+                    "\n...[助手回复已截断，共 ${rawText.length} 字符]...\n" +
+                    rawText.takeLast(MAX_ASSISTANT_CHARS_FOR_SUMMARY / 2)
+            } else rawText
             message.copy(content = text, contentJson = "", reasoningContent = "")
         }
 
         // 沿用当前会话前缀与工具目录发起摘要请求以复用缓存；不投影屏幕上下文与待消费截图。
         val mainPrefixMessages = if (enableCacheReuse) {
             val rawPrefix = JSONArray()
+            var prefixEstimatedChars = 0
             for (index in 0 until systemCount) {
-                rawPrefix.put(JSONObject(messages.getJSONObject(index).toString()).apply {
+                val sys = JSONObject(messages.getJSONObject(index).toString()).apply {
                     remove("_eta_assistant_screen_context")
-                })
+                }
+                prefixEstimatedChars += sys.toString().length
+                rawPrefix.put(sys)
             }
             for (index in 0 until end) {
                 val item = history[index]
                 if (item.optBoolean("_eta_observation")) continue
-                rawPrefix.put(JSONObject(item.toString()).apply {
+                val msg = JSONObject(item.toString()).apply {
                     remove("_eta_assistant_screen_context")
-                })
+                }
+                prefixEstimatedChars += msg.toString().length
+                rawPrefix.put(msg)
             }
-            messageProjector?.invoke(rawPrefix) ?: rawPrefix
+            // 若前缀字符量已经过大（例如超过 200,000 字符），沿用原始未修剪前缀会直接导致摘要请求超限失败，
+            // 此时应放弃缓存复用，转用修剪后的 safe 消息发起隔离摘要。
+            if (prefixEstimatedChars > MAX_PREFIX_CHARS_FOR_CACHE_REUSE) {
+                null
+            } else {
+                messageProjector?.invoke(rawPrefix) ?: rawPrefix
+            }
         } else {
             null
         }
@@ -158,6 +179,9 @@ internal class AgentContextCompactor(
 
     companion object {
         private val ARCHIVE_ID_REGEX = Regex("^fold-(\\d+)$")
+        const val MAX_TOOL_CHARS_FOR_SUMMARY = 1_000
+        const val MAX_ASSISTANT_CHARS_FOR_SUMMARY = 3_000
+        const val MAX_PREFIX_CHARS_FOR_CACHE_REUSE = 200_000
 
         fun canSplit(history: List<JSONObject>, end: Int): Boolean {
             if (end <= 0 || end > history.size) return false
