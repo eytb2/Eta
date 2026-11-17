@@ -160,7 +160,7 @@ internal fun AgentAppShell(
                         WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
                     ),
                     topBar = {
-                        if (currentRoute !is AppRoute.Settings) {
+                        if (currentRoute !is AppRoute.Settings && currentRoute !is AppRoute.Terminal) {
                             CouiTopAppBar(
                                 title = {
                                     if (isHome && homeModelPickerState != null) {
@@ -243,7 +243,7 @@ internal fun AgentAppShell(
                         WindowInsetsSides.Top + WindowInsetsSides.Horizontal,
                     ),
                     topBar = {
-                        if (currentRoute !is AppRoute.Settings) {
+                        if (currentRoute !is AppRoute.Settings && currentRoute !is AppRoute.Terminal) {
                             TopBarBackdrop(backdrop) {
                                 AgentTopBar(
                                     route = currentRoute,

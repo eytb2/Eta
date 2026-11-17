@@ -150,7 +150,9 @@ internal class UserTerminalController(
                 // 用户工具的安装器常把 PATH 写进 profile；常驻会话不是 login shell，这里显式补齐。
                 append("[ -f /etc/profile ] && . /etc/profile; ")
                 append("[ -f \"${'$'}HOME/.profile\" ] && . \"${'$'}HOME/.profile\"; ")
-                append("cd ${shellQuote(safeCwd)} && export TERM=dumb NO_COLOR=1")
+                append("cd ${shellQuote(safeCwd)} && export TERM=xterm-256color COLORTERM=truecolor; ")
+                append("export LS_COLORS='di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=34;46:cd=34;43:su=30;41:sg=30;46:tw=30;42:ow=30;43'; ")
+                append("alias ls='ls --color=auto' 2>/dev/null; alias ll='ls -la --color=auto' 2>/dev/null; ")
             }
             val setupResult = execInternal(newSession, setup, SETUP_TIMEOUT_MS, null)
             if (setupResult.exitCode != 0 || setupResult.timedOut) {

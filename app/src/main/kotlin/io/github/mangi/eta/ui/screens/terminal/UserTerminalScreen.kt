@@ -95,6 +95,7 @@ internal fun UserTerminalScreen(
     store: UserTerminalStore,
     onOpenEnvironment: () -> Unit,
     onOpenConsole: (() -> Unit)? = null,
+    onBack: (() -> Unit)? = null,
 ) {
     val state by store.uiState.collectAsState()
     var input by remember { mutableStateOf("") }
@@ -148,6 +149,7 @@ internal fun UserTerminalScreen(
             },
             modeTarget = if (onOpenConsole != null) TerminalModeTarget.CONSOLE else null,
             onSwitchMode = { onOpenConsole?.invoke() },
+            onBack = onBack,
         )
         Box(
             modifier = Modifier

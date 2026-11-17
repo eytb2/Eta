@@ -79,6 +79,8 @@
   <string name="terminal_session_restarted">会话已断开，重新连接</string>
   <string name="terminal_session_closed">会话已退出</string>
   <string name="terminal_reconnect">重新连接</string>
+  <string name="terminal_tab_android">安卓终端</string>
+  <string name="terminal_tab_linux">Linux 终端</string>
   <string name="terminal_console_mode">控制台模式</string>
   <string name="terminal_block_mode">简洁模式</string>
   <string name="terminal_key_select">选择</string>

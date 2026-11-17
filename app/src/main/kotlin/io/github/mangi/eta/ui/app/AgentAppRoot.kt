@@ -522,11 +522,12 @@ fun AgentAppRoot(
             }
             entry<AppRoute.Terminal>(swipeDismiss = swipeDismiss) {
                 LaunchedEffect(Unit) { requestExecutionNotifications() }
-                RoutedShell(route = AppRoute.Terminal) {
+                RoutedShell(route = AppRoute.Terminal, applyShellPadding = false) {
                     TerminalEntryScreen(
                         terminalStore = appViewModel.terminalStore,
                         consoleStore = appViewModel.consoleStore,
                         onOpenEnvironment = { pushRoute(AppRoute.LinuxEnvironment) },
+                        onBack = { popRoute() },
                     )
                 }
             }

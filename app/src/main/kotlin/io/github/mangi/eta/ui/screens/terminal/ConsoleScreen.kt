@@ -48,6 +48,7 @@ internal fun TerminalEntryScreen(
     terminalStore: UserTerminalStore,
     consoleStore: ConsoleStore,
     onOpenEnvironment: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val consoleState by consoleStore.uiState.collectAsState()
     var consoleMode by rememberSaveable { mutableStateOf(true) }
@@ -67,6 +68,7 @@ internal fun TerminalEntryScreen(
             terminalStore = terminalStore,
             onExitConsole = { consoleMode = false },
             onOpenEnvironment = onOpenEnvironment,
+            onBack = onBack,
         )
         else -> UserTerminalScreen(
             store = terminalStore,
@@ -76,6 +78,7 @@ internal fun TerminalEntryScreen(
             } else {
                 null
             },
+            onBack = onBack,
         )
     }
 }
@@ -92,6 +95,7 @@ internal fun ConsoleScreen(
     terminalStore: UserTerminalStore,
     onExitConsole: () -> Unit,
     onOpenEnvironment: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     val state by store.uiState.collectAsState()
     val terminalState by terminalStore.uiState.collectAsState()
@@ -147,6 +151,7 @@ internal fun ConsoleScreen(
                 },
                 modeTarget = TerminalModeTarget.BLOCKS,
                 onSwitchMode = onExitConsole,
+                onBack = onBack,
             )
         } else {
             Spacer(modifier = Modifier.statusBarsPadding())

@@ -22,6 +22,7 @@ import io.github.mangi.eta.agent.terminal.isLinux
 import io.github.mangi.eta.agent.terminal.terminalEnvironment
 import io.github.mangi.eta.core.AndroidAgentLogger
 import io.github.mangi.eta.data.repository.LinuxEnvironmentSettingsRepository
+import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -74,9 +75,12 @@ internal class ConsoleStore(
     private val initialLinuxEnvironment =
         LinuxEnvironmentSettingsRepository.current(appContext).terminalEnvironment
 
+    private val initialEnvironment =
+        if (isReady(initialLinuxEnvironment)) initialLinuxEnvironment else TerminalEnvironment.ANDROID
+
     private val _uiState = MutableStateFlow(
         ConsoleUiState(
-            environment = initialLinuxEnvironment,
+            environment = initialEnvironment,
             linuxEnvironment = initialLinuxEnvironment,
             ptySupported = true,
         ),
@@ -167,10 +171,13 @@ internal class ConsoleStore(
 
     fun refreshLinuxEnvironment() {
         val configured = LinuxEnvironmentSettingsRepository.current(appContext).terminalEnvironment
+        val ready = isReady(configured)
         _uiState.update { state ->
             val updateCurrent = state.environment.isLinux && state.sessions.isEmpty()
             state.copy(
-                environment = if (updateCurrent) configured else state.environment,
+                environment = if (updateCurrent) {
+                    if (ready) configured else TerminalEnvironment.ANDROID
+                } else state.environment,
                 linuxEnvironment = configured,
             )
         }
@@ -356,6 +363,61 @@ internal class ConsoleStore(
         }
     }
 
+    private fun ensureAndroidShellRc(workspace: String) {
+        runCatching {
+            val dir = File(workspace)
+            if (!dir.exists()) dir.mkdirs()
+            val shrc = File(dir, ".shrc")
+            val content = """
+                [ -f /system/etc/mkshrc ] && . /system/etc/mkshrc
+                alias ls='ls --color=auto'
+                alias ll='ls -la --color=auto'
+                alias l='ls -CF --color=auto'
+                alias grep='grep --color=auto'
+                export LS_COLORS='di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=34;46:cd=34;43:su=30;41:sg=30;46:tw=30;42:ow=30;43'
+                export COLORTERM=truecolor
+                export TERM=xterm-256color
+            """.trimIndent() + "\n"
+            shrc.writeText(content)
+        }
+    }
+
+    private fun ensureLinuxShellRc(rootfsPath: String) {
+        runCatching {
+            val rootfs = File(rootfsPath)
+            val profileD = File(rootfs, "etc/profile.d")
+            if (profileD.isDirectory || profileD.mkdirs()) {
+                val colorScript = File(profileD, "00-eta-colors.sh")
+                colorScript.writeText(
+                    """
+                    alias ls='ls --color=auto'
+                    alias ll='ls -la --color=auto'
+                    alias l='ls -CF --color=auto'
+                    alias grep='grep --color=auto'
+                    export LS_COLORS='di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=34;46:cd=34;43:su=30;41:sg=30;46:tw=30;42:ow=30;43'
+                    export COLORTERM=truecolor
+                    export TERM=xterm-256color
+                    """.trimIndent() + "\n",
+                )
+                colorScript.setReadable(true, false)
+            }
+            val bashrc = File(rootfs, "root/.bashrc")
+            val colorSnippet = "\nalias ls='ls --color=auto'\nalias ll='ls -la --color=auto'\nalias l='ls -CF --color=auto'\n" +
+                "alias grep='grep --color=auto'\n" +
+                "export LS_COLORS='di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=34;46:cd=34;43:su=30;41:sg=30;46:tw=30;42:ow=30;43'\n" +
+                "export COLORTERM=truecolor\n"
+            if (bashrc.exists()) {
+                val current = bashrc.readText()
+                if (!current.contains("alias ls=")) {
+                    bashrc.appendText(colorSnippet)
+                }
+            } else {
+                bashrc.parentFile?.mkdirs()
+                bashrc.writeText(colorSnippet)
+            }
+        }
+    }
+
     private fun createTerminalSession(
         sessionId: String,
         environment: TerminalEnvironment,
@@ -369,6 +431,7 @@ internal class ConsoleStore(
         val commonEnv = arrayOf(
             "TERM=xterm-256color",
             "COLORTERM=truecolor",
+            "LS_COLORS=di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=34;46:cd=34;43:su=30;41:sg=30;46:tw=30;42:ow=30;43",
             "LANG=C.UTF-8",
             "LC_ALL=C.UTF-8",
         )
@@ -381,23 +444,37 @@ internal class ConsoleStore(
         if (environment == TerminalEnvironment.ANDROID) {
             if (identity == "root") {
                 val workspace = TerminalRuntime.workspace("root")
+                ensureAndroidShellRc(workspace)
                 val launcher = "export PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\$PATH\"; " +
-                    "mkdir -p '$workspace' 2>/dev/null; cd '$workspace' 2>/dev/null || cd /; exec sh"
+                    "mkdir -p '$workspace' 2>/dev/null; cd '$workspace' 2>/dev/null || cd /; " +
+                    "export ENV='$workspace/.shrc'; " +
+                    "export LS_COLORS='di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=34;46:cd=34;43:su=30;41:sg=30;46:tw=30;42:ow=30;43'; " +
+                    "export COLORTERM=truecolor; " +
+                    "exec sh -l"
                 shellPath = "su"
                 cwd = "/"
                 args = arrayOf("su", "-c", launcher)
-                envVars = commonEnv + arrayOf("HOME=$workspace")
+                envVars = commonEnv + arrayOf(
+                    "HOME=$workspace",
+                    "ENV=$workspace/.shrc",
+                )
             } else {
                 val workspace = TerminalRuntime.userWorkspacePath
+                ensureAndroidShellRc(workspace)
                 shellPath = "/system/bin/sh"
                 cwd = workspace
                 args = arrayOf("/system/bin/sh", "-l")
-                envVars = commonEnv + arrayOf("HOME=$workspace", "PATH=/system/bin:/system/xbin")
+                envVars = commonEnv + arrayOf(
+                    "HOME=$workspace",
+                    "ENV=$workspace/.shrc",
+                    "PATH=/system/bin:/system/xbin",
+                )
             }
         } else {
             if (rootfsPath == null || !LinuxEnvironmentPaths.rootfsReady(rootfsPath)) {
                 return null
             }
+            ensureLinuxShellRc(rootfsPath)
             val sharedMounts = linuxSharedMountsProvider()
             val backend = LinuxEnvironmentPaths.backendOf(rootfsPath)
 

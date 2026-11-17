@@ -78,6 +78,8 @@
   <string name="terminal_session_restarted">Session ended; reconnected</string>
   <string name="terminal_session_closed">Session exited</string>
   <string name="terminal_reconnect">Reconnect</string>
+  <string name="terminal_tab_android">Android</string>
+  <string name="terminal_tab_linux">Linux</string>
   <string name="terminal_console_mode">Console mode</string>
   <string name="terminal_block_mode">Simple mode</string>
   <string name="terminal_key_select">Select</string>

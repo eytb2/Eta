@@ -344,18 +344,27 @@ internal class ShellProcessSupervisor(
                 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
                 /bin/sh -lc "${'$'}eta_payload"
             fi
+            if [ -x "${'$'}eta_rootfs/bin/bash" ]; then
+              eta_interactive_shell="/bin/bash"
+            else
+              eta_interactive_shell="/bin/sh"
+            fi
             if [ -x "${'$'}eta_rootfs/usr/bin/env" ]; then
               exec "${'$'}eta_busybox" chroot "${'$'}eta_rootfs" /usr/bin/env -i \
-                HOME=/root USER=root LOGNAME=root SHELL=/bin/sh TERM=$termType \
+                HOME=/root USER=root LOGNAME=root SHELL="${'$'}eta_interactive_shell" TERM=$termType \
+                COLORTERM=truecolor \
+                LS_COLORS="di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=34;46:cd=34;43:su=30;41:sg=30;46:tw=30;42:ow=30;43" \
                 LANG=C.UTF-8 LC_ALL=C.UTF-8 \
                 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-                /bin/sh
+                "${'$'}eta_interactive_shell" -l
             fi
             exec "${'$'}eta_busybox" chroot "${'$'}eta_rootfs" /bin/busybox env -i \
-              HOME=/root USER=root LOGNAME=root SHELL=/bin/sh TERM=$termType \
+              HOME=/root USER=root LOGNAME=root SHELL="${'$'}eta_interactive_shell" TERM=$termType \
+              COLORTERM=truecolor \
+              LS_COLORS="di=1;34:ln=1;36:so=1;35:pi=33:ex=1;32:bd=34;46:cd=34;43:su=30;41:sg=30;46:tw=30;42:ow=30;43" \
               LANG=C.UTF-8 LC_ALL=C.UTF-8 \
               PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-              /bin/sh
+              "${'$'}eta_interactive_shell" -l
         """.trimIndent()
         val innerScript = if (mountsBlock.isEmpty()) {
             "$innerScriptHead\n$innerScriptTail"

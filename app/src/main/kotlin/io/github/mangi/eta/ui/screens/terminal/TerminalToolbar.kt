@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Insights
@@ -36,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.terminal.TerminalEnvironment
 import io.github.mangi.eta.ui.app.displayName
+import io.github.mangi.eta.ui.components.MiuixBackButton
 import io.github.mangi.eta.ui.components.StatusSuccess
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -47,8 +50,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 internal enum class TerminalModeTarget { CONSOLE, BLOCKS }
 
 /**
- * 块式终端与控制台共用的工具栏：左侧环境分段切换，右侧会话、守护任务与视图切换图标。
- * 页面标题与返回由应用壳层持有，这里不重复标题。
+ * 块式终端与控制台共用的统一工具栏：左侧返回按钮与环境分段切换，右侧会话、守护任务与视图切换图标。
  */
 @Composable
 internal fun TerminalToolbar(
@@ -62,14 +64,20 @@ internal fun TerminalToolbar(
     modeTarget: TerminalModeTarget?,
     onSwitchMode: () -> Unit,
     modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .statusBarsPadding()
             .height(52.dp)
-            .padding(horizontal = 12.dp),
+            .padding(start = if (onBack != null) 4.dp else 12.dp, end = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        if (onBack != null) {
+            MiuixBackButton(onClick = onBack)
+            Spacer(modifier = Modifier.width(4.dp))
+        }
         EnvironmentSegments(
             options = listOf(TerminalEnvironment.ANDROID, linuxEnvironment),
             selected = environment,
@@ -124,6 +132,10 @@ private fun EnvironmentSegments(
                 targetValue = if (isSelected) colors.surface else Color.Transparent,
                 label = "segmentBackground",
             )
+            val label = when (option) {
+                TerminalEnvironment.ANDROID -> stringResource(R.string.terminal_tab_android)
+                else -> stringResource(R.string.terminal_tab_linux)
+            }
             Box(
                 modifier = Modifier
                     .squircleBackground(background, 9.dp)
@@ -140,7 +152,7 @@ private fun EnvironmentSegments(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = option.displayName,
+                    text = label,
                     style = MiuixTheme.textStyles.footnote1,
                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                     color = if (isSelected) colors.onSurface else colors.onSurfaceVariantSummary,
