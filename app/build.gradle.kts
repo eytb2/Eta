@@ -6,9 +6,10 @@ plugins {
 }
 
 val releaseStoreFile = System.getenv("ETA_RELEASE_STORE_FILE")
-val releaseStorePassword = System.getenv("ETA_RELEASE_STORE_PASSWORD")
-val releaseKeyAlias = System.getenv("ETA_RELEASE_KEY_ALIAS")
-val releaseKeyPassword = System.getenv("ETA_RELEASE_KEY_PASSWORD")
+    ?: file("${rootDir}/keystore/release.jks").takeIf { it.exists() }?.absolutePath
+val releaseStorePassword = System.getenv("ETA_RELEASE_STORE_PASSWORD") ?: "eta123456"
+val releaseKeyAlias = System.getenv("ETA_RELEASE_KEY_ALIAS") ?: "eta"
+val releaseKeyPassword = System.getenv("ETA_RELEASE_KEY_PASSWORD") ?: "eta123456"
 val hasReleaseSigning = listOf(
     releaseStoreFile,
     releaseStorePassword,
@@ -65,10 +66,14 @@ android {
             versionNameSuffix = "-debug" + buildMetadataSuffix
             isMinifyEnabled = true
             isPseudoLocalesEnabled = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
         release {
             versionNameSuffix = buildMetadataSuffix
-            signingConfig = signingConfigs.findByName("release")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
             isMinifyEnabled = true
             // 资源收缩在 arm64 aapt2 替换链路上产出损坏 APK（缺 AndroidManifest/resources.arsc），本机先关闭
             isShrinkResources = true
@@ -101,7 +106,7 @@ android {
         }
         jniLibs {
             useLegacyPackaging = true
-            keepDebugSymbols += setOf("**/libproot_exec.so", "**/libproot_loader.so", "**/libeta_pty.so")
+            keepDebugSymbols += setOf("**/libproot_exec.so", "**/libproot_loader.so", "**/libeta_pty.so", "**/libtermux.so")
         }
         resources {
             // 合并 Xposed 模块声明，避免 release 裁剪后模块入口失效
@@ -150,6 +155,7 @@ androidComponents {
 }
 
 dependencies {
+    implementation(project(":terminal-view"))
     coreLibraryDesugaring(libs.desugar.jdk.libs.nio)
     implementation(libs.jsoup)
     implementation(libs.commons.compress)

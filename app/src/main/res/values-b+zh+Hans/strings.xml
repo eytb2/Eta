@@ -81,6 +81,8 @@
   <string name="terminal_reconnect">重新连接</string>
   <string name="terminal_console_mode">控制台模式</string>
   <string name="terminal_block_mode">简洁模式</string>
+  <string name="terminal_key_select">选择</string>
+  <string name="terminal_key_copy">复制</string>
   <string name="terminal_key_paste">粘贴</string>
   <string name="terminal_keyboard_show">显示键盘</string>
   <string name="terminal_keyboard_hide">收起键盘</string>
@@ -89,6 +91,17 @@
   <string name="terminal_key_down">下</string>
   <string name="terminal_key_right">右</string>
   <string name="terminal_key_enter">回车</string>
+  <string name="terminal_copied">已复制到剪贴板</string>
+  <string name="terminal_all_copied">已复制全部输出</string>
+  <string name="terminal_pasted">已粘贴</string>
+  <string name="terminal_select_hint">拖动光标选中文本后点击复制</string>
+  <string name="terminal_manage_title">终端设置</string>
+  <string name="terminal_fullscreen">全屏终端模式</string>
+  <string name="terminal_fullscreen_summary">隐藏顶部工具栏以获得最大终端显示空间</string>
+  <string name="terminal_two_rows_keys">双行快捷按键栏</string>
+  <string name="terminal_two_rows_keys_summary">Termux 风格双行排布，操作更高效</string>
+  <string name="terminal_font_size">终端字体大小</string>
+  <string name="terminal_font_size_summary">可在终端双指捏合缩放</string>
   <string name="terminal_interrupted">已停止</string>
   <string name="terminal_env_switched">已切换到 %1$s 环境</string>
   <string name="terminal_exit_code">退出码 %1$d</string>

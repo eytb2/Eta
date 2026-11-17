@@ -80,6 +80,8 @@
   <string name="terminal_reconnect">Reconnect</string>
   <string name="terminal_console_mode">Console mode</string>
   <string name="terminal_block_mode">Simple mode</string>
+  <string name="terminal_key_select">Select</string>
+  <string name="terminal_key_copy">Copy</string>
   <string name="terminal_key_paste">Paste</string>
   <string name="terminal_keyboard_show">Show keyboard</string>
   <string name="terminal_keyboard_hide">Hide keyboard</string>
@@ -88,6 +90,17 @@
   <string name="terminal_key_down">Down</string>
   <string name="terminal_key_right">Right</string>
   <string name="terminal_key_enter">Enter</string>
+  <string name="terminal_copied">Copied to clipboard</string>
+  <string name="terminal_all_copied">All output copied</string>
+  <string name="terminal_pasted">Pasted from clipboard</string>
+  <string name="terminal_select_hint">Drag handles to select text, then tap Copy</string>
+  <string name="terminal_manage_title">Terminal Settings</string>
+  <string name="terminal_fullscreen">Fullscreen Terminal</string>
+  <string name="terminal_fullscreen_summary">Hides top toolbar to maximize terminal space</string>
+  <string name="terminal_two_rows_keys">Two-row Shortcut Keys</string>
+  <string name="terminal_two_rows_keys_summary">Termux-style paired keys for faster navigation</string>
+  <string name="terminal_font_size">Terminal Font Size</string>
+  <string name="terminal_font_size_summary">Pinch terminal screen to zoom</string>
   <string name="terminal_interrupted">Stopped</string>
   <string name="terminal_env_switched">Switched to %1$s</string>
   <string name="terminal_exit_code">Exit code %1$d</string>

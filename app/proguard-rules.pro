@@ -78,3 +78,10 @@
 -keep class io.github.mangi.eta.agent.virtualdisplay.VirtualDisplayCommandMain {
     public static void main(java.lang.String[]);
 }
+
+# Termux terminal-emulator & terminal-view
+-dontwarn com.termux.**
+-keep class com.termux.** { *; }
+-keepclasseswithmembernames class * {
+    native <methods>;
+}

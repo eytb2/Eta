@@ -2,9 +2,12 @@ package io.github.mangi.eta.ui.screens.terminal
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,12 +19,16 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardReturn
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.KeyboardHide
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -48,7 +55,9 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import io.github.mangi.eta.R
 import io.github.mangi.eta.agent.terminal.TerminalKey
 import io.github.mangi.eta.agent.terminal.TerminalModifiers
@@ -113,34 +122,102 @@ private sealed interface BarKey {
     data class Symbol(val text: String) : BarKey
     data object Ctrl : BarKey
     data object Alt : BarKey
+    data object Select : BarKey
+    data object Copy : BarKey
     data object Paste : BarKey
+    data object ToggleKeyboard : BarKey
+    data object Fullscreen : BarKey
+    data object Manage : BarKey
 }
 
-/** 常用键在前，首屏覆盖 TUI 导航所需的 Esc、Tab、修饰键、方向键与回车。 */
-private val BAR_KEYS: List<BarKey> = listOf(
+private data class KeyColumn(
+    val top: BarKey,
+    val bottom: BarKey,
+)
+
+/**
+ * Termux 经典双行成对列布局：
+ * 上下两行配对对齐，横向联动滚动，极大提升移动端终端操作效率。
+ */
+private val TWO_ROW_COLUMNS: List<KeyColumn> = listOf(
+    KeyColumn(
+        top = BarKey.Special(TerminalKey.ESCAPE, label = "Esc"),
+        bottom = BarKey.Special(TerminalKey.TAB, label = "Tab"),
+    ),
+    KeyColumn(
+        top = BarKey.Symbol("/"),
+        bottom = BarKey.Ctrl,
+    ),
+    KeyColumn(
+        top = BarKey.Symbol("-"),
+        bottom = BarKey.Alt,
+    ),
+    KeyColumn(
+        top = BarKey.Special(TerminalKey.HOME, label = "Home"),
+        bottom = BarKey.Special(TerminalKey.LEFT, icon = Icons.Rounded.KeyboardArrowUp, iconRotation = -90f, repeatable = true),
+    ),
+    KeyColumn(
+        top = BarKey.Special(TerminalKey.UP, icon = Icons.Rounded.KeyboardArrowUp, repeatable = true),
+        bottom = BarKey.Special(TerminalKey.DOWN, icon = Icons.Rounded.KeyboardArrowUp, iconRotation = 180f, repeatable = true),
+    ),
+    KeyColumn(
+        top = BarKey.Special(TerminalKey.END, label = "End"),
+        bottom = BarKey.Special(TerminalKey.RIGHT, icon = Icons.Rounded.KeyboardArrowUp, iconRotation = 90f, repeatable = true),
+    ),
+    KeyColumn(
+        top = BarKey.Special(TerminalKey.PAGE_UP, label = "PgUp", repeatable = true),
+        bottom = BarKey.Special(TerminalKey.PAGE_DOWN, label = "PgDn", repeatable = true),
+    ),
+    KeyColumn(
+        top = BarKey.Symbol("|"),
+        bottom = BarKey.Special(TerminalKey.ENTER, icon = Icons.AutoMirrored.Rounded.KeyboardReturn),
+    ),
+    KeyColumn(
+        top = BarKey.Symbol("~"),
+        bottom = BarKey.ToggleKeyboard,
+    ),
+    KeyColumn(
+        top = BarKey.Fullscreen,
+        bottom = BarKey.Manage,
+    ),
+    KeyColumn(
+        top = BarKey.Copy,
+        bottom = BarKey.Paste,
+    ),
+    KeyColumn(
+        top = BarKey.Select,
+        bottom = BarKey.Symbol("$"),
+    ),
+)
+
+/** 单行紧凑布局。 */
+private val SINGLE_ROW_KEYS: List<BarKey> = listOf(
     BarKey.Special(TerminalKey.ESCAPE, label = "Esc"),
     BarKey.Special(TerminalKey.TAB, label = "Tab"),
+    BarKey.Special(TerminalKey.ENTER, icon = Icons.AutoMirrored.Rounded.KeyboardReturn),
     BarKey.Ctrl,
     BarKey.Alt,
+    BarKey.Symbol("/"),
+    BarKey.Symbol("-"),
+    BarKey.Symbol("|"),
+    BarKey.Symbol("~"),
+    BarKey.Symbol("$"),
     BarKey.Special(TerminalKey.LEFT, icon = Icons.Rounded.KeyboardArrowUp, iconRotation = -90f, repeatable = true),
-    BarKey.Special(TerminalKey.UP, icon = Icons.Rounded.KeyboardArrowUp, repeatable = true),
     BarKey.Special(TerminalKey.DOWN, icon = Icons.Rounded.KeyboardArrowUp, iconRotation = 180f, repeatable = true),
+    BarKey.Special(TerminalKey.UP, icon = Icons.Rounded.KeyboardArrowUp, repeatable = true),
     BarKey.Special(TerminalKey.RIGHT, icon = Icons.Rounded.KeyboardArrowUp, iconRotation = 90f, repeatable = true),
-    BarKey.Special(TerminalKey.ENTER, icon = Icons.AutoMirrored.Rounded.KeyboardReturn),
     BarKey.Special(TerminalKey.HOME, label = "Home"),
     BarKey.Special(TerminalKey.END, label = "End"),
     BarKey.Special(TerminalKey.PAGE_UP, label = "PgUp", repeatable = true),
     BarKey.Special(TerminalKey.PAGE_DOWN, label = "PgDn", repeatable = true),
-    BarKey.Symbol("/"),
-    BarKey.Symbol("|"),
-    BarKey.Symbol("-"),
-    BarKey.Symbol("~"),
+    BarKey.Select,
+    BarKey.Copy,
     BarKey.Paste,
+    BarKey.ToggleKeyboard,
+    BarKey.Fullscreen,
+    BarKey.Manage,
 )
 
-private val KEY_HEIGHT = 36.dp
-private val KEY_MIN_WIDTH = 40.dp
-private val KEY_CORNER = 10.dp
 private const val REPEAT_DELAY_MS = 380L
 private const val REPEAT_INTERVAL_MS = 55L
 
@@ -148,81 +225,237 @@ private const val REPEAT_INTERVAL_MS = 55L
 internal fun ConsoleKeyBar(
     modifierKeys: ConsoleModifierKeys,
     keyboardVisible: Boolean,
+    twoRows: Boolean,
+    isFullscreen: Boolean,
     onKey: (TerminalKey) -> Unit,
     onText: (String) -> Unit,
     onPaste: () -> Unit,
     onToggleKeyboard: () -> Unit,
+    onToggleFullscreen: () -> Unit,
+    onOpenManage: () -> Unit,
     modifier: Modifier = Modifier,
+    isSelecting: Boolean = false,
+    onSelect: () -> Unit = {},
+    onCopy: () -> Unit = {},
+    onSelectAll: (() -> Unit)? = null,
+    onCopyAll: (() -> Unit)? = null,
 ) {
-    val listState = rememberLazyListState()
-    val fadeColor = MiuixTheme.colorScheme.surface
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        LazyRow(
-            state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fadingEnd(visible = { listState.canScrollForward }, color = fadeColor),
-            contentPadding = PaddingValues(horizontal = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+    if (twoRows) {
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            items(BAR_KEYS) { key ->
-                when (key) {
-                    is BarKey.Special -> KeyCap(
-                        label = key.label,
-                        icon = key.icon,
-                        iconRotation = key.iconRotation,
-                        contentDescription = key.key.description(),
-                        repeatable = key.repeatable,
-                        onPress = { onKey(key.key) },
+            TWO_ROW_COLUMNS.forEach { col ->
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    RenderBarKey(
+                        key = col.top,
+                        modifierKeys = modifierKeys,
+                        isSelecting = isSelecting,
+                        isFullscreen = isFullscreen,
+                        keyboardVisible = keyboardVisible,
+                        height = 29.dp,
+                        minWidth = 36.dp,
+                        corner = 8.dp,
+                        onKey = onKey,
+                        onText = onText,
+                        onSelect = onSelect,
+                        onSelectAll = onSelectAll,
+                        onCopy = onCopy,
+                        onCopyAll = onCopyAll,
+                        onPaste = onPaste,
+                        onToggleKeyboard = onToggleKeyboard,
+                        onToggleFullscreen = onToggleFullscreen,
+                        onOpenManage = onOpenManage,
                     )
-                    is BarKey.Symbol -> KeyCap(
-                        label = key.text,
-                        monospace = true,
-                        contentDescription = key.text,
-                        onPress = { onText(key.text) },
-                    )
-                    BarKey.Ctrl -> KeyCap(
-                        label = "Ctrl",
-                        sticky = modifierKeys.ctrl,
-                        contentDescription = "Ctrl",
-                        onPress = modifierKeys::tapCtrl,
-                        onLongPress = modifierKeys::lockCtrl,
-                    )
-                    BarKey.Alt -> KeyCap(
-                        label = "Alt",
-                        sticky = modifierKeys.alt,
-                        contentDescription = "Alt",
-                        onPress = modifierKeys::tapAlt,
-                        onLongPress = modifierKeys::lockAlt,
-                    )
-                    BarKey.Paste -> KeyCap(
-                        icon = Icons.Rounded.ContentPaste,
-                        contentDescription = stringResource(R.string.terminal_key_paste),
-                        onPress = onPaste,
+                    RenderBarKey(
+                        key = col.bottom,
+                        modifierKeys = modifierKeys,
+                        isSelecting = isSelecting,
+                        isFullscreen = isFullscreen,
+                        keyboardVisible = keyboardVisible,
+                        height = 29.dp,
+                        minWidth = 36.dp,
+                        corner = 8.dp,
+                        onKey = onKey,
+                        onText = onText,
+                        onSelect = onSelect,
+                        onSelectAll = onSelectAll,
+                        onCopy = onCopy,
+                        onCopyAll = onCopyAll,
+                        onPaste = onPaste,
+                        onToggleKeyboard = onToggleKeyboard,
+                        onToggleFullscreen = onToggleFullscreen,
+                        onOpenManage = onOpenManage,
                     )
                 }
             }
         }
-        Box(
-            modifier = Modifier
-                .padding(horizontal = 2.dp)
-                .width(0.5.dp)
-                .height(20.dp)
-                .background(MiuixTheme.colorScheme.dividerLine),
+    } else {
+        val listState = rememberLazyListState()
+        val fadeColor = MiuixTheme.colorScheme.surface
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            LazyRow(
+                state = listState,
+                modifier = Modifier
+                    .weight(1f)
+                    .fadingEnd(visible = { listState.canScrollForward }, color = fadeColor),
+                contentPadding = PaddingValues(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                items(SINGLE_ROW_KEYS) { key ->
+                    RenderBarKey(
+                        key = key,
+                        modifierKeys = modifierKeys,
+                        isSelecting = isSelecting,
+                        isFullscreen = isFullscreen,
+                        keyboardVisible = keyboardVisible,
+                        height = 36.dp,
+                        minWidth = 40.dp,
+                        corner = 10.dp,
+                        onKey = onKey,
+                        onText = onText,
+                        onSelect = onSelect,
+                        onSelectAll = onSelectAll,
+                        onCopy = onCopy,
+                        onCopyAll = onCopyAll,
+                        onPaste = onPaste,
+                        onToggleKeyboard = onToggleKeyboard,
+                        onToggleFullscreen = onToggleFullscreen,
+                        onOpenManage = onOpenManage,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RenderBarKey(
+    key: BarKey,
+    modifierKeys: ConsoleModifierKeys,
+    isSelecting: Boolean,
+    isFullscreen: Boolean,
+    keyboardVisible: Boolean,
+    height: Dp,
+    minWidth: Dp,
+    corner: Dp,
+    onKey: (TerminalKey) -> Unit,
+    onText: (String) -> Unit,
+    onSelect: () -> Unit,
+    onSelectAll: (() -> Unit)?,
+    onCopy: () -> Unit,
+    onCopyAll: (() -> Unit)?,
+    onPaste: () -> Unit,
+    onToggleKeyboard: () -> Unit,
+    onToggleFullscreen: () -> Unit,
+    onOpenManage: () -> Unit,
+) {
+    when (key) {
+        is BarKey.Special -> KeyCap(
+            label = key.label,
+            icon = key.icon,
+            iconRotation = key.iconRotation,
+            contentDescription = key.key.description(),
+            repeatable = key.repeatable,
+            height = height,
+            minWidth = minWidth,
+            corner = corner,
+            onPress = { onKey(key.key) },
         )
-        KeyCap(
+        is BarKey.Symbol -> KeyCap(
+            label = key.text,
+            monospace = true,
+            contentDescription = key.text,
+            height = height,
+            minWidth = minWidth,
+            corner = corner,
+            onPress = { onText(key.text) },
+        )
+        BarKey.Ctrl -> KeyCap(
+            label = "Ctrl",
+            sticky = modifierKeys.ctrl,
+            contentDescription = "Ctrl",
+            height = height,
+            minWidth = minWidth,
+            corner = corner,
+            onPress = modifierKeys::tapCtrl,
+            onLongPress = modifierKeys::lockCtrl,
+        )
+        BarKey.Alt -> KeyCap(
+            label = "Alt",
+            sticky = modifierKeys.alt,
+            contentDescription = "Alt",
+            height = height,
+            minWidth = minWidth,
+            corner = corner,
+            onPress = modifierKeys::tapAlt,
+            onLongPress = modifierKeys::lockAlt,
+        )
+        BarKey.Select -> KeyCap(
+            label = "Sel",
+            sticky = if (isSelecting) StickyModifier.LOCKED else StickyModifier.OFF,
+            contentDescription = stringResource(R.string.terminal_key_select),
+            height = height,
+            minWidth = minWidth,
+            corner = corner,
+            onPress = onSelect,
+            onLongPress = onSelectAll,
+        )
+        BarKey.Copy -> KeyCap(
+            icon = Icons.Rounded.ContentCopy,
+            contentDescription = stringResource(R.string.terminal_key_copy),
+            height = height,
+            minWidth = minWidth,
+            corner = corner,
+            onPress = onCopy,
+            onLongPress = onCopyAll,
+        )
+        BarKey.Paste -> KeyCap(
+            icon = Icons.Rounded.ContentPaste,
+            contentDescription = stringResource(R.string.terminal_key_paste),
+            height = height,
+            minWidth = minWidth,
+            corner = corner,
+            onPress = onPaste,
+        )
+        BarKey.ToggleKeyboard -> KeyCap(
             icon = if (keyboardVisible) Icons.Rounded.KeyboardHide else Icons.Rounded.Keyboard,
             contentDescription = stringResource(
                 if (keyboardVisible) R.string.terminal_keyboard_hide else R.string.terminal_keyboard_show,
             ),
-            subtle = true,
+            height = height,
+            minWidth = minWidth,
+            corner = corner,
             onPress = onToggleKeyboard,
-            modifier = Modifier.padding(start = 6.dp, end = 10.dp),
+        )
+        BarKey.Fullscreen -> KeyCap(
+            label = if (isFullscreen) "⛶" else "🗖",
+            monospace = true,
+            contentDescription = stringResource(R.string.terminal_fullscreen),
+            height = height,
+            minWidth = minWidth,
+            corner = corner,
+            onPress = onToggleFullscreen,
+        )
+        BarKey.Manage -> KeyCap(
+            icon = Icons.Rounded.Settings,
+            contentDescription = stringResource(R.string.terminal_manage_title),
+            height = height,
+            minWidth = minWidth,
+            corner = corner,
+            onPress = onOpenManage,
         )
     }
 }
@@ -232,6 +465,9 @@ private fun KeyCap(
     contentDescription: String,
     onPress: () -> Unit,
     modifier: Modifier = Modifier,
+    height: Dp = 36.dp,
+    minWidth: Dp = 40.dp,
+    corner: Dp = 10.dp,
     label: String? = null,
     icon: ImageVector? = null,
     iconRotation: Float = 0f,
@@ -252,7 +488,7 @@ private fun KeyCap(
     val background by animateColorAsState(
         targetValue = when {
             sticky == StickyModifier.LOCKED -> colors.primary
-            sticky == StickyModifier.ONCE -> colors.primary.copy(alpha = 0.16f)
+            sticky == StickyModifier.ONCE -> colors.primary.copy(alpha = 0.18f)
             pressed -> colors.surfaceContainerHighest
             else -> idle
         },
@@ -266,9 +502,20 @@ private fun KeyCap(
 
     Box(
         modifier = modifier
-            .height(KEY_HEIGHT)
-            .widthIn(min = KEY_MIN_WIDTH)
-            .squircleBackground(background, KEY_CORNER)
+            .height(height)
+            .widthIn(min = minWidth)
+            .squircleBackground(background, corner)
+            .then(
+                if (sticky == StickyModifier.ONCE) {
+                    Modifier.border(
+                        width = 1.dp,
+                        color = colors.primary.copy(alpha = 0.55f),
+                        shape = RoundedCornerShape(corner),
+                    )
+                } else {
+                    Modifier
+                }
+            )
             .semantics {
                 role = Role.Button
                 this.contentDescription = contentDescription
@@ -304,7 +551,7 @@ private fun KeyCap(
                     },
                 )
             }
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = if (height < 32.dp) 6.dp else 10.dp),
         contentAlignment = Alignment.Center,
     ) {
         when {
@@ -313,15 +560,16 @@ private fun KeyCap(
                 contentDescription = null,
                 tint = content,
                 modifier = Modifier
-                    .size(20.dp)
+                    .size(if (height < 32.dp) 17.dp else 20.dp)
                     .rotate(iconRotation),
             )
             label != null -> Text(
                 text = label,
-                style = MiuixTheme.textStyles.footnote1.let {
+                style = (if (height < 32.dp) MiuixTheme.textStyles.footnote2 else MiuixTheme.textStyles.footnote1).let {
                     if (monospace) it.copy(fontFamily = EtaMonospace) else it
                 },
-                fontWeight = FontWeight.Medium,
+                fontSize = if (height < 32.dp) 11.5.sp else 13.sp,
+                fontWeight = if (sticky != StickyModifier.OFF) FontWeight.SemiBold else FontWeight.Medium,
                 color = content,
                 maxLines = 1,
             )

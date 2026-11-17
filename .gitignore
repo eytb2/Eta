@@ -7,8 +7,11 @@
 
 # Gradle / Kotlin 构建缓存
 /.gradle/
+/.gradle-cache/
+/.sdk-extra/
 /.kotlin/
 **/build/
+*.bak
 
 # Android 构建产物
 .cxx/

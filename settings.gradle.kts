@@ -29,3 +29,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "Eta"
 include(":app")
+include(":terminal-emulator")
+include(":terminal-view")
